@@ -112,3 +112,27 @@ def test_init_kmeans_pp_shapes_and_distinct():
     dists = torch.cdist(centers, centers)
     dists.fill_diagonal_(1.0)
     assert (dists > 1e-6).all()
+
+
+def test_moments_to_params_and_precisions_float32_high_dim_ill_conditioned():
+    from egmm.kernels import moments_to_params_and_precisions
+
+    torch.manual_seed(0)
+    K, D = 8, 96
+    weights = torch.full((K,), 1.0 / K, dtype=torch.float32)
+    means = torch.randn(K, D, dtype=torch.float32) * 3.0
+    # Construct rank-1 / ill-conditioned second moments with tiny negative rounding error in float32
+    covs = torch.zeros(K, D, D, dtype=torch.float32)
+    v = torch.randn(K, D, 1, dtype=torch.float32)
+    covs = 20.0 * torch.bmm(v, v.transpose(-1, -2))
+    covs[0] -= 1e-4 * torch.eye(D, dtype=torch.float32)
+    M, S, Q = params_to_moments(weights, means, covs, covariance_type="full")
+    w, m, c, pf, ldh = moments_to_params_and_precisions(
+        M, S, Q, covariance_type="full", reg_covar=1e-6
+    )
+    assert torch.isfinite(w).all()
+    assert torch.isfinite(m).all()
+    assert torch.isfinite(c).all()
+    assert torch.isfinite(pf).all()
+    assert torch.isfinite(ldh).all()
+

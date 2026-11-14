@@ -1,0 +1,15 @@
+=== Statistical Significance Summary ===
+EGMM vs TorchBatchGMM      (n=23): NLL W/T/L=19/0/4, med_dNLL=-0.3691, Wilcoxon p_nll=0.0002148 | med_speedup=2.33x, p_time=2.384e-07
+EGMM vs OnlineGMM_tuned    (n=23): NLL W/T/L=19/1/3, med_dNLL=-0.3470, Wilcoxon p_nll=7.319e-05 | med_speedup=0.77x, p_time=0.02137
+EGMM vs NaiveMinibatchGMM  (n=23): NLL W/T/L=22/0/1, med_dNLL=-1.0595, Wilcoxon p_nll=7.868e-06 | med_speedup=0.66x, p_time=1.669e-06
+EGMM vs EMeansInitGMM      (n=23): NLL W/T/L=23/0/0, med_dNLL=-1.4685, Wilcoxon p_nll=2.384e-07 | med_speedup=1.12x, p_time=0.03009
+EGMM vs SklearnGMM         (n=23): NLL W/T/L=11/0/12, med_dNLL=+0.0102, Wilcoxon p_nll=0.9643 | med_speedup=56.07x, p_time=2.384e-07
+
+Friedman test (n=23, k=6): chi2=41.957, p=6.011e-08, Nemenyi CD(0.05)=1.572
+Mean NLL Ranks (1=best):
+  EGMM              : 1.913
+  SklearnGMM        : 2.826
+  TorchBatchGMM     : 3.261
+  OnlineGMM_tuned   : 3.435
+  EMeansInitGMM     : 4.609
+  NaiveMinibatchGMM : 4.957

@@ -1,0 +1,7 @@
+=== External Small-Dataset Generalization Summary (n=16) ===
+EGMM_cuda  vs TorchBatchGMM   : NLL W/T/L=9/0/7, med_dNLL=-0.0105, p_nll=0.5966 | med_spd=1.14x, p_time=0.04431
+EGMM_cuda  vs OnlineGMM_tuned : NLL W/T/L=11/0/5, med_dNLL=-0.1826, p_nll=0.09344 | med_spd=0.51x, p_time=3.052e-05
+EGMM_cuda  vs SklearnGMM      : NLL W/T/L=5/0/11, med_dNLL=+0.1182, p_nll=0.3755 | med_spd=1.11x, p_time=0.3225
+EGMM_auto  vs TorchBatchGMM   : NLL W/T/L=10/0/6, med_dNLL=-0.0811, p_nll=0.07391 | med_spd=1.88x, p_time=6.104e-05
+EGMM_auto  vs OnlineGMM_tuned : NLL W/T/L=12/0/4, med_dNLL=-0.2119, p_nll=0.05066 | med_spd=0.74x, p_time=0.007629
+EGMM_auto  vs SklearnGMM      : NLL W/T/L=5/0/11, med_dNLL=+0.1007, p_nll=0.4037 | med_spd=1.68x, p_time=0.006287

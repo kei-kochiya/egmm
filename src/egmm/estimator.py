@@ -84,22 +84,139 @@ class EGMM(DensityMixin, BaseEstimator):
             return torch.device("cpu")
         return torch.device(self.device)
 
-    def _to_float64_tensor(
-        self, X: np.ndarray | torch.Tensor, device: torch.device
-    ) -> torch.Tensor:
+    def _extract_array_shape(self, X: np.ndarray | torch.Tensor) -> tuple[int, int]:
         if isinstance(X, torch.Tensor):
-            return X.to(device=device, dtype=torch.float64)
-        arr = np.asarray(X)
-        if arr.ndim != 2:
-            raise ValueError(f"Expected 2D array, got shape {arr.shape}.")
-        return torch.as_tensor(arr, dtype=torch.float64, device=device)
+            if X.ndim != 2:
+                raise ValueError(f"Expected 2D tensor, got shape {tuple(X.shape)}.")
+            N, D = int(X.shape[0]), int(X.shape[1])
+        else:
+            arr = np.asarray(X)
+            if arr.ndim != 2:
+                raise ValueError(f"Expected 2D array, got shape {arr.shape}.")
+            N, D = int(arr.shape[0]), int(arr.shape[1])
+        if N < 1:
+            raise ValueError("Expected at least 1 sample.")
+        return N, D
 
-    def _standardize(
-        self, X_f64: torch.Tensor, target_dtype: torch.dtype
+    def _standardize_to_device(
+        self,
+        X: np.ndarray | torch.Tensor,
+        device: torch.device,
+        target_dtype: torch.dtype,
     ) -> torch.Tensor:
-        return ((X_f64 - self._x_mean_f64.unsqueeze(0)) / self._x_std_f64.unsqueeze(0)).to(
-            dtype=target_dtype
-        )
+        N, D = self._extract_array_shape(X)
+        mean_64 = self._x_mean_f64.to(device=device, dtype=torch.float64).unsqueeze(0)
+        inv_std_64 = (1.0 / self._x_std_f64.to(device=device, dtype=torch.float64)).unsqueeze(0)
+        chunk = 65536
+        X_std = torch.empty((N, D), device=device, dtype=target_dtype)
+
+        if isinstance(X, torch.Tensor):
+            X_src = X.to(device=device) if (device.type == "cuda" and X.dtype == torch.float32 and target_dtype == torch.float32) else X
+            for st in range(0, N, chunk):
+                en = min(N, st + chunk)
+                Xc = X_src[st:en].to(device=device, dtype=torch.float64)
+                X_std[st:en] = ((Xc - mean_64) * inv_std_64).to(dtype=target_dtype)
+            return X_std
+
+        arr = np.asarray(X)
+        if arr.dtype == np.float32 and target_dtype == torch.float32:
+            X_dev = torch.from_numpy(np.ascontiguousarray(arr)).to(device=device)
+            for st in range(0, N, chunk):
+                en = min(N, st + chunk)
+                Xc = X_dev[st:en].to(torch.float64)
+                X_std[st:en] = ((Xc - mean_64) * inv_std_64).to(dtype=torch.float32)
+            return X_std
+
+        if N * D <= 16_000_000:
+            X_dev = torch.from_numpy(np.ascontiguousarray(arr, dtype=np.float64)).to(device=device)
+            for st in range(0, N, chunk):
+                en = min(N, st + chunk)
+                X_std[st:en] = ((X_dev[st:en] - mean_64) * inv_std_64).to(dtype=target_dtype)
+            return X_std
+
+        for st in range(0, N, chunk):
+            en = min(N, st + chunk)
+            Xc = torch.from_numpy(np.ascontiguousarray(arr[st:en], dtype=np.float64)).to(device=device)
+            X_std[st:en] = ((Xc - mean_64) * inv_std_64).to(dtype=target_dtype)
+        return X_std
+
+    def _fit_standardizer_and_transform(
+        self,
+        X: np.ndarray | torch.Tensor,
+        device: torch.device,
+        target_dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, int, int]:
+        """Compute exact shifted float64 feature mean/std on device and return standardized tensor."""
+        N, D = self._extract_array_shape(X)
+        chunk = 65536
+        sum1 = torch.zeros(D, device=device, dtype=torch.float64)
+        sum2 = torch.zeros(D, device=device, dtype=torch.float64)
+        X_cached: torch.Tensor | None = None
+
+        if isinstance(X, torch.Tensor):
+            if X.device == device or (device.type == "cuda" and X.dtype == torch.float32 and target_dtype == torch.float32):
+                X_cached = X.to(device=device)
+                x0 = X_cached[0:1].to(torch.float64)
+                for st in range(0, N, chunk):
+                    en = min(N, st + chunk)
+                    dx = X_cached[st:en].to(torch.float64) - x0
+                    sum1 += dx.sum(dim=0)
+                    sum2 += (dx * dx).sum(dim=0)
+            else:
+                x0 = X[0:1].to(device=device, dtype=torch.float64)
+                for st in range(0, N, chunk):
+                    en = min(N, st + chunk)
+                    dx = X[st:en].to(device=device, dtype=torch.float64) - x0
+                    sum1 += dx.sum(dim=0)
+                    sum2 += (dx * dx).sum(dim=0)
+        else:
+            arr = np.asarray(X)
+            if arr.dtype == np.float32 and target_dtype == torch.float32:
+                X_cached = torch.from_numpy(np.ascontiguousarray(arr)).to(device=device)
+                x0 = X_cached[0:1].to(torch.float64)
+                for st in range(0, N, chunk):
+                    en = min(N, st + chunk)
+                    dx = X_cached[st:en].to(torch.float64) - x0
+                    sum1 += dx.sum(dim=0)
+                    sum2 += (dx * dx).sum(dim=0)
+            elif N * D <= 16_000_000:
+                X_cached = torch.from_numpy(np.ascontiguousarray(arr, dtype=np.float64)).to(device=device)
+                x0 = X_cached[0:1]
+                for st in range(0, N, chunk):
+                    en = min(N, st + chunk)
+                    dx = X_cached[st:en] - x0
+                    sum1 += dx.sum(dim=0)
+                    sum2 += (dx * dx).sum(dim=0)
+            else:
+                x0 = torch.from_numpy(np.ascontiguousarray(arr[0:1], dtype=np.float64)).to(device=device)
+                for st in range(0, N, chunk):
+                    en = min(N, st + chunk)
+                    dx = torch.from_numpy(np.ascontiguousarray(arr[st:en], dtype=np.float64)).to(device=device) - x0
+                    sum1 += dx.sum(dim=0)
+                    sum2 += (dx * dx).sum(dim=0)
+
+        mean_delta = sum1 / N
+        mean_64 = x0.squeeze(0) + mean_delta
+        var_64 = (sum2 / N - mean_delta * mean_delta).clamp_min(0.0)
+        std_64 = torch.sqrt(var_64).clamp_min(1e-12)
+
+        self._x_mean_f64 = mean_64
+        self._x_std_f64 = std_64
+        self._x_mean_np = mean_64.detach().cpu().numpy()
+        self._x_std_np = std_64.detach().cpu().numpy()
+        self._log_jac_t = (-torch.log(std_64).sum()).to(dtype=target_dtype)
+
+        if X_cached is not None:
+            mean_b = mean_64.unsqueeze(0)
+            inv_std_b = (1.0 / std_64).unsqueeze(0)
+            X_std = torch.empty((N, D), device=device, dtype=target_dtype)
+            for st in range(0, N, chunk):
+                en = min(N, st + chunk)
+                Xc = X_cached[st:en].to(torch.float64) if X_cached.dtype != torch.float64 else X_cached[st:en]
+                X_std[st:en] = ((Xc - mean_b) * inv_std_b).to(dtype=target_dtype)
+            return X_std, N, D
+
+        return self._standardize_to_device(X, device=device, target_dtype=target_dtype), N, D
 
     def _make_generator(self, device: torch.device, seed_offset: int = 0) -> torch.Generator | None:
         if self.random_state is None:
@@ -112,10 +229,12 @@ class EGMM(DensityMixin, BaseEstimator):
         self,
         X_std: torch.Tensor,
         generator: torch.Generator | None,
+        out_dtype: torch.dtype | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         N, D = X_std.shape
         K = self.n_components
         device, dtype = X_std.device, X_std.dtype
+        m_dtype = out_dtype if out_dtype is not None else dtype
 
         n_seed = min(N, max(2048, 32 * K))
         if n_seed < N:
@@ -126,6 +245,13 @@ class EGMM(DensityMixin, BaseEstimator):
 
         if self.init_params == "kmeans++":
             means = init_kmeans_pp(X_seed, K, generator=generator)
+            # Fast 5-step Lloyd refinement on X_seed stabilizes initial Voronoi moments.
+            for _ in range(5):
+                assign = torch.argmin(torch.cdist(X_seed, means), dim=1)
+                one_hot = torch.nn.functional.one_hot(assign, num_classes=K).to(dtype=dtype)
+                counts = one_hot.sum(dim=0)
+                new_means = (one_hot.T @ X_seed) / counts.clamp_min(1.0).unsqueeze(-1)
+                means = torch.where((counts > 0).unsqueeze(-1), new_means, means)
         elif self.init_params == "random":
             idx = torch.randperm(X_seed.shape[0], generator=generator, device=device)[:K]
             if idx.shape[0] < K:
@@ -134,42 +260,74 @@ class EGMM(DensityMixin, BaseEstimator):
         else:
             raise ValueError(f"Unsupported init_params={self.init_params!r}.")
 
-        # Assign seed points to nearest centers to initialize empirical moments cleanly.
+        # Vectorized moment initialization in m_dtype (float64 prevents cancellation).
+        X_seed_m = X_seed.to(dtype=m_dtype)
+        means_m = means.to(dtype=m_dtype)
         dists = torch.cdist(X_seed, means)
         assign = torch.argmin(dists, dim=1)
-        one_hot = torch.nn.functional.one_hot(assign, num_classes=K).to(dtype=dtype)
-        counts = one_hot.sum(dim=0)
-
-        global_var = X_seed.var(dim=0, unbiased=False).clamp_min(1e-2)
-        weights = torch.empty(K, device=device, dtype=dtype)
-        if self.covariance_type == "diag":
-            covs = torch.empty((K, D), device=device, dtype=dtype)
-        else:
-            covs = torch.empty((K, D, D), device=device, dtype=dtype)
-
+        one_hot_m = torch.nn.functional.one_hot(assign, num_classes=K).to(dtype=m_dtype)
+        counts = one_hot_m.sum(dim=0)  # (K,)
         inv_n = 1.0 / max(1, n_seed)
-        eye_d = torch.eye(D, device=device, dtype=dtype)
-        for k in range(K):
-            mask = assign == k
-            cnt = int(counts[k].item())
-            if cnt >= 2:
-                pts = X_seed[mask]
-                means[k] = pts.mean(dim=0)
-                diff = pts - means[k].unsqueeze(0)
-                weights[k] = cnt * inv_n
-                if self.covariance_type == "diag":
-                    covs[k] = (diff * diff).mean(dim=0) + self.reg_covar
-                else:
-                    covs[k] = (diff.T @ diff) / cnt + self.reg_covar * eye_d
-            else:
-                weights[k] = max(inv_n, 1e-3 / K)
-                if self.covariance_type == "diag":
-                    covs[k] = global_var + self.reg_covar
-                else:
-                    covs[k] = torch.diag(global_var) + self.reg_covar * eye_d
 
-        weights = weights / weights.sum()
-        return params_to_moments(weights, means, covs, covariance_type=self.covariance_type)
+        M_init = counts * inv_n
+        S_init = (one_hot_m.T @ X_seed_m) * inv_n
+        if self.covariance_type == "diag":
+            Q_init = (one_hot_m.T @ (X_seed_m * X_seed_m)) * inv_n
+        else:
+            rX = one_hot_m.T.unsqueeze(-1) * X_seed_m.unsqueeze(0)  # (K, n_seed, D)
+            Q_init = (
+                torch.bmm(rX.transpose(-1, -2), X_seed_m.unsqueeze(0).expand(K, n_seed, D))
+                * inv_n
+            )
+
+        # Patch any starving/singleton cluster with global variance
+        bad = counts < 2
+        if bad.any():
+            global_var = X_seed_m.var(dim=0, unbiased=False).clamp_min(1e-2)
+            fallback_m = max(inv_n, 1e-3 / K)
+            M_init = torch.where(bad, torch.full_like(M_init, fallback_m), M_init)
+            S_init = torch.where(bad.unsqueeze(-1), M_init.unsqueeze(-1) * means_m, S_init)
+            if self.covariance_type == "diag":
+                fallback_q = M_init.unsqueeze(-1) * (global_var.unsqueeze(0) + means_m * means_m)
+                Q_init = torch.where(bad.unsqueeze(-1), fallback_q, Q_init)
+            else:
+                diag_gv = torch.diag(global_var).unsqueeze(0)
+                fallback_q = M_init.view(K, 1, 1) * (
+                    diag_gv + torch.bmm(means_m.unsqueeze(-1), means_m.unsqueeze(-2))
+                )
+                Q_init = torch.where(bad.view(K, 1, 1), fallback_q, Q_init)
+
+        # Normalize total mass to 1.0
+        mass_sum = M_init.sum().clamp_min(1e-12)
+        return M_init / mass_sum, S_init / mass_sum, Q_init / mass_sum
+
+    def _moments_to_estep_params(
+        self,
+        M: torch.Tensor,
+        S: torch.Tensor,
+        Q: torch.Tensor,
+        estep_dtype: torch.dtype,
+        *,
+        allow_sync: bool = True,
+        fast_cholesky_f32: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Project float64 sufficient statistics to E-step dtype parameters while keeping float64 covariances."""
+        weights, means, covs, prec_factor, log_det_half = moments_to_params_and_precisions(
+            M,
+            S,
+            Q,
+            covariance_type=self.covariance_type,
+            reg_covar=self.reg_covar,
+            allow_sync=allow_sync,
+            fast_cholesky_f32=fast_cholesky_f32,
+        )
+        return (
+            weights.to(dtype=estep_dtype),
+            means.to(dtype=estep_dtype),
+            covs,
+            prec_factor.to(dtype=estep_dtype),
+            log_det_half.to(dtype=estep_dtype),
+        )
 
     def _sync_public_attributes(
         self,
@@ -205,10 +363,20 @@ class EGMM(DensityMixin, BaseEstimator):
             c_orig_t = covs_std.to(torch.float64) * scale_mat.unsqueeze(0)
             c_orig_t = 0.5 * (c_orig_t + c_orig_t.transpose(-1, -2))
             # Precision in original space
-            L_cov_orig = torch.linalg.cholesky(c_orig_t)
-            D = c_orig_t.shape[-1]
-            eye_d = torch.eye(D, device=c_orig_t.device, dtype=torch.float64).expand_as(L_cov_orig)
-            L_inv_orig = torch.linalg.solve_triangular(L_cov_orig, eye_d, upper=False)
+            c_orig_f64 = c_orig_t.to(torch.float64)
+            D = c_orig_f64.shape[-1]
+            eye_d = torch.eye(D, device=c_orig_f64.device, dtype=torch.float64)
+            L_cov_orig, info = torch.linalg.cholesky_ex(c_orig_f64)
+            if (info != 0).any():
+                eigvals, eigvecs = torch.linalg.eigh(c_orig_f64)
+                eigvals = eigvals.clamp_min(1e-12)
+                c_orig_f64 = torch.bmm(eigvecs * eigvals.unsqueeze(-2), eigvecs.transpose(-1, -2))
+                c_orig_f64 = 0.5 * (c_orig_f64 + c_orig_f64.transpose(-1, -2))
+                c_orig_t = c_orig_f64
+                L_cov_orig = torch.linalg.cholesky(c_orig_f64)
+            L_inv_orig = torch.linalg.solve_triangular(
+                L_cov_orig, eye_d.expand_as(L_cov_orig), upper=False
+            )
             pc_orig_t = L_inv_orig.transpose(-1, -2)
             p_orig_t = pc_orig_t @ pc_orig_t.transpose(-1, -2)
 
@@ -225,20 +393,97 @@ class EGMM(DensityMixin, BaseEstimator):
         self, X: np.ndarray | torch.Tensor
     ) -> tuple[torch.Tensor, torch.device, torch.dtype, int, int]:
         dtype = self._resolve_dtype()
-        N, D = X.shape if isinstance(X, torch.Tensor) else np.asarray(X).shape
+        N, D = self._extract_array_shape(X)
         device = self._resolve_device(N, D)
-        X_f64 = self._to_float64_tensor(X, device=device)
 
         self.n_features_in_ = D
         self._device_t = device
         self._dtype_t = dtype
 
-        # Fit standardization strictly on training data in float64 to avoid offset cancellation.
-        self._x_mean_f64 = X_f64.mean(dim=0)
-        self._x_std_f64 = X_f64.std(dim=0, unbiased=False).clamp_min(1e-12)
-        self._log_jac_t = (-torch.log(self._x_std_f64).sum()).to(dtype=dtype)
-        X_std = self._standardize(X_f64, target_dtype=dtype)
+        X_std, _, _ = self._fit_standardizer_and_transform(X, device=device, target_dtype=dtype)
         return X_std, device, dtype, N, D
+
+    def _build_epoch_batches(
+        self,
+        n_samples: int,
+        batch_size: int,
+        steps_per_epoch: int,
+        max_epochs: int,
+        generator: torch.Generator | None,
+        device: torch.device,
+    ) -> torch.Tensor:
+        used_len = steps_per_epoch * batch_size
+        epoch_batches = []
+        for _ in range(max_epochs):
+            perm = torch.randperm(n_samples, generator=generator, device=device)
+            if used_len <= n_samples:
+                epoch_batches.append(perm[:used_len].view(steps_per_epoch, batch_size))
+            else:
+                pad = used_len - n_samples
+                epoch_batches.append(
+                    torch.cat([perm, perm[:pad]], dim=0).view(steps_per_epoch, batch_size)
+                )
+        return torch.cat(epoch_batches, dim=0)
+
+    def _build_schedule_and_revivals(
+        self, total_steps: int, hp: Any, device: torch.device
+    ) -> tuple[torch.Tensor, set[int]]:
+        if type(self)._step_alpha is EGMM._step_alpha:
+            t_idx = torch.arange(total_steps, device=device, dtype=torch.float64)
+            frac = (
+                (t_idx / max(1, total_steps - 1)).clamp_max(1.0)
+                if total_steps > 1
+                else torch.zeros_like(t_idx)
+            )
+            alphas_t = hp.alpha_min + 0.5 * (hp.alpha_0 - hp.alpha_min) * (
+                1.0 + torch.cos(math.pi * frac)
+            )
+        else:
+            alphas_t = torch.tensor(
+                [self._step_alpha(t, total_steps, hp) for t in range(total_steps)],
+                device=device,
+                dtype=torch.float64,
+            )
+
+        if not self.revive_dead:
+            rev_set: set[int] = set()
+        elif hp.revive_points > 0:
+            rev_set = (
+                {int(round(f * (total_steps - 1))) for f in np.linspace(0.15, 0.70, hp.revive_points)}
+                if total_steps >= 6
+                else set()
+            )
+        elif hp.revive_points == -1:
+            cutoff = int(0.8 * total_steps)
+            rev_set = {t for t in range(cutoff) if (t + 1) % hp.revive_every == 0}
+        else:
+            rev_set = set()
+        return alphas_t, rev_set
+
+    def _eval_subset_lower_bound(
+        self,
+        X_std: torch.Tensor,
+        weights: torch.Tensor,
+        means: torch.Tensor,
+        prec_factor: torch.Tensor,
+        log_det_half: torch.Tensor,
+    ) -> float:
+        N = X_std.shape[0]
+        stride = max(1, N // 65536)
+        X_eval = X_std[::stride] if stride > 1 else X_std
+        log_weights = torch.log(weights.clamp_min(1e-30)).unsqueeze(0)
+        ll_sum = torch.zeros((), device=X_std.device, dtype=torch.float64)
+        for st in range(0, X_eval.shape[0], 16384):
+            en = min(X_eval.shape[0], st + 16384)
+            lp = compute_log_gaussian_prob_from_precisions(
+                X_eval[st:en],
+                means,
+                prec_factor,
+                log_det_half,
+                covariance_type=self.covariance_type,
+            )
+            ll_sum = ll_sum + torch.logsumexp(lp + log_weights, dim=1).sum().to(torch.float64)
+        return (float(ll_sum.item()) / max(1, X_eval.shape[0])) + float(self._log_jac_t.item())
 
     def fit(self, X: np.ndarray | torch.Tensor, y: Any = None) -> EGMM:
         X_std, device, dtype, N, D = self._prepare_fit_data(X)
@@ -253,61 +498,150 @@ class EGMM(DensityMixin, BaseEstimator):
             alpha=self.alpha,
             revive_every=self.revive_every,
         )
-        steps_per_epoch = max(1, math.ceil(N / hp.batch_size))
-        total_steps = hp.max_epochs * steps_per_epoch
+        steps_ep = hp.steps_per_epoch
+        total_steps = hp.max_epochs * steps_ep
+        fast_chol = dtype == torch.float32
+        alphas_t, rev_set = self._build_schedule_and_revivals(total_steps, hp, device)
+        use_polish = type(self) is EGMM and hp.polish_steps > 0
+        use_init_scale = type(self) is EGMM and hp.init_usage_scale != 1.0
 
         best_lower_bound = -math.inf
         best_state: tuple[torch.Tensor, ...] | None = None
         best_revivals = 0
-        best_epochs = 0
+        best_iters = 0
         best_converged = False
 
         for init_idx in range(max(1, self.n_init)):
             gen = self._make_generator(device, seed_offset=init_idx * 9973)
-            M, S, Q = self._initialize_moments(X_std, generator=gen)
-            weights, means, covs, prec_factor, log_det_half = moments_to_params_and_precisions(
-                M, S, Q, covariance_type=self.covariance_type, reg_covar=self.reg_covar
+            M, S, Q = self._initialize_moments(X_std, generator=gen, out_dtype=torch.float64)
+            if use_init_scale:
+                M = M * hp.init_usage_scale
+                S = S * hp.init_usage_scale
+                Q = Q * hp.init_usage_scale
+
+            weights, means, _, prec_factor, log_det_half = self._moments_to_estep_params(
+                M, S, Q, estep_dtype=dtype, allow_sync=False, fast_cholesky_f32=fast_chol
+            )
+            batches = self._build_epoch_batches(
+                N, hp.batch_size, steps_ep, hp.max_epochs, generator=gen, device=device
             )
 
-            global_step = 0
             revivals_count = 0
-            prev_epoch_lb = -math.inf
             converged = False
-            epochs_done = 0
+            polish_done = 0
 
-            for epoch in range(hp.max_epochs):
-                perm = torch.randperm(N, generator=gen, device=device)
-                epoch_ll_sum = 0.0
-                epoch_seen = 0
+            if device.type == "cuda" and total_steps >= 4:
+                pos_buf = torch.zeros((), device=device, dtype=torch.long)
+                M_buf = M.clone()
+                S_buf = S.clone()
+                Q_buf = Q.clone()
+                w_buf = weights.clone()
+                mu_buf = means.clone()
+                pf_buf = prec_factor.clone()
+                ldh_buf = log_det_half.clone()
+                idx_buf = torch.empty((hp.batch_size,), device=device, dtype=torch.long)
+                a_buf = torch.zeros((), device=device, dtype=torch.float64)
 
-                for start in range(0, N, hp.batch_size):
-                    end = min(N, start + hp.batch_size)
-                    Xb = X_std[perm[start:end]]
+                def step_body() -> None:
+                    torch.index_select(batches, 0, pos_buf, out=idx_buf.unsqueeze(0))
+                    torch.index_select(alphas_t, 0, pos_buf, out=a_buf.unsqueeze(0))
+                    xb = X_std.index_select(0, idx_buf)
+                    _, _, dM, dS, dQ = e_step_batch(
+                        xb,
+                        w_buf,
+                        mu_buf,
+                        covariance_type=self.covariance_type,
+                        prec_factor=pf_buf,
+                        log_det_half=ldh_buf,
+                        stats_dtype=torch.float64,
+                    )
+                    om = 1.0 - a_buf
+                    M_buf.copy_(om * M_buf + a_buf * dM)
+                    S_buf.copy_(om * S_buf + a_buf * dS)
+                    Q_buf.copy_(om * Q_buf + a_buf * dQ)
+                    w2, mu2, _, pf2, ldh2 = self._moments_to_estep_params(
+                        M_buf,
+                        S_buf,
+                        Q_buf,
+                        estep_dtype=dtype,
+                        allow_sync=False,
+                        fast_cholesky_f32=fast_chol,
+                    )
+                    w_buf.copy_(w2)
+                    mu_buf.copy_(mu2)
+                    pf_buf.copy_(pf2)
+                    ldh_buf.copy_(ldh2)
+                    pos_buf.add_(1)
 
-                    _, batch_lb, m_bar, s_bar, q_bar = e_step_batch(
-                        Xb,
+                stream = torch.cuda.Stream(device=device)
+                stream.wait_stream(torch.cuda.current_stream(device=device))
+                with torch.cuda.stream(stream):
+                    step_body()
+                torch.cuda.current_stream(device=device).wait_stream(stream)
+
+                pos_buf.zero_()
+                M_buf.copy_(M)
+                S_buf.copy_(S)
+                Q_buf.copy_(Q)
+                w_buf.copy_(weights)
+                mu_buf.copy_(means)
+                pf_buf.copy_(prec_factor)
+                ldh_buf.copy_(log_det_half)
+
+                graph = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(graph, stream=stream):
+                    step_body()
+
+                for gstep in range(total_steps):
+                    graph.replay()
+                    if gstep in rev_set:
+                        M_r, S_r, Q_r, n_rev = revive_dead_components(
+                            M_buf,
+                            S_buf,
+                            Q_buf,
+                            covariance_type=self.covariance_type,
+                            reg_covar=self.reg_covar,
+                            dead_ratio=self.dead_ratio,
+                        )
+                        revivals_count += n_rev
+                        if n_rev > 0:
+                            M_buf.copy_(M_r)
+                            S_buf.copy_(S_r)
+                            Q_buf.copy_(Q_r)
+                            w2, mu2, _, pf2, ldh2 = self._moments_to_estep_params(
+                                M_buf,
+                                S_buf,
+                                Q_buf,
+                                estep_dtype=dtype,
+                                allow_sync=False,
+                                fast_cholesky_f32=fast_chol,
+                            )
+                            w_buf.copy_(w2)
+                            mu_buf.copy_(mu2)
+                            pf_buf.copy_(pf2)
+                            ldh_buf.copy_(ldh2)
+
+                del graph
+                M, S, Q = M_buf, S_buf, Q_buf
+                weights, means, prec_factor, log_det_half = w_buf, mu_buf, pf_buf, ldh_buf
+            else:
+                for gstep in range(total_steps):
+                    xb = X_std.index_select(0, batches[gstep])
+                    _, _, dM, dS, dQ = e_step_batch(
+                        xb,
                         weights,
                         means,
                         covariance_type=self.covariance_type,
                         prec_factor=prec_factor,
                         log_det_half=log_det_half,
+                        stats_dtype=torch.float64,
                     )
-                    bsz = end - start
-                    epoch_ll_sum += float(batch_lb.item()) * bsz
-                    epoch_seen += bsz
-
-                    alpha_t = self._step_alpha(global_step, total_steps, hp)
-                    one_minus = 1.0 - alpha_t
-                    M = one_minus * M + alpha_t * m_bar
-                    S = one_minus * S + alpha_t * s_bar
-                    Q = one_minus * Q + alpha_t * q_bar
-
-                    # Revive dead components only in the first 80% of steps so final cosine phase settles.
-                    if (
-                        self.revive_dead
-                        and global_step < int(0.8 * total_steps)
-                        and (global_step + 1) % hp.revive_every == 0
-                    ):
+                    a = float(alphas_t[gstep].item())
+                    om = 1.0 - a
+                    M = om * M + a * dM
+                    S = om * S + a * dS
+                    Q = om * Q + a * dQ
+                    if gstep in rev_set:
                         M, S, Q, n_rev = revive_dead_components(
                             M,
                             S,
@@ -317,29 +651,63 @@ class EGMM(DensityMixin, BaseEstimator):
                             dead_ratio=self.dead_ratio,
                         )
                         revivals_count += n_rev
-
-                    weights, means, covs, prec_factor, log_det_half = (
-                        moments_to_params_and_precisions(
-                            M, S, Q, covariance_type=self.covariance_type, reg_covar=self.reg_covar
-                        )
+                    weights, means, _, prec_factor, log_det_half = self._moments_to_estep_params(
+                        M,
+                        S,
+                        Q,
+                        estep_dtype=dtype,
+                        allow_sync=False,
+                        fast_cholesky_f32=fast_chol,
                     )
-                    global_step += 1
 
-                epochs_done = epoch + 1
-                epoch_lb = (epoch_ll_sum / max(1, epoch_seen)) + float(self._log_jac_t.item())
-                if epoch >= 1 and abs(epoch_lb - prev_epoch_lb) < self.tol:
-                    # Only stop early after at least half of scheduled cosine decay has passed.
-                    if global_step >= total_steps // 2:
-                        converged = True
-                        prev_epoch_lb = epoch_lb
-                        break
-                prev_epoch_lb = epoch_lb
+            last_ll: float | None = None
+            if use_polish:
+                prev_ll: float | None = None
+                for pit in range(hp.polish_steps):
+                    _, ll, dM, dS, dQ = e_step_batch(
+                        X_std,
+                        weights,
+                        means,
+                        covariance_type=self.covariance_type,
+                        prec_factor=prec_factor,
+                        log_det_half=log_det_half,
+                        stats_dtype=torch.float64,
+                    )
+                    M, S, Q = dM, dS, dQ
+                    weights, means, _, prec_factor, log_det_half = self._moments_to_estep_params(
+                        M,
+                        S,
+                        Q,
+                        estep_dtype=dtype,
+                        allow_sync=False,
+                        fast_cholesky_f32=fast_chol,
+                    )
+                    polish_done = pit + 1
+                    if self.covariance_type == "diag" and (pit + 1) % 3 == 0:
+                        llv = float(ll.item())
+                        last_ll = llv
+                        if prev_ll is not None and abs(llv - prev_ll) < self.tol:
+                            converged = True
+                            break
+                        prev_ll = llv
+                if last_ll is None:
+                    last_ll = float(ll.item())
 
-            if prev_epoch_lb > best_lower_bound or best_state is None:
-                best_lower_bound = prev_epoch_lb
+            weights, means, covs, prec_factor, log_det_half = self._moments_to_estep_params(
+                M, S, Q, estep_dtype=dtype, allow_sync=True, fast_cholesky_f32=False
+            )
+            if last_ll is not None and self.n_init <= 1:
+                init_lb = last_ll + float(self._log_jac_t.item())
+            else:
+                init_lb = self._eval_subset_lower_bound(
+                    X_std, weights, means, prec_factor, log_det_half
+                )
+
+            if init_lb > best_lower_bound or best_state is None:
+                best_lower_bound = init_lb
                 best_state = (M, S, Q, weights, means, covs, prec_factor, log_det_half)
                 best_revivals = revivals_count
-                best_epochs = epochs_done
+                best_iters = hp.max_epochs + polish_done
                 best_converged = converged
 
         assert best_state is not None
@@ -349,7 +717,7 @@ class EGMM(DensityMixin, BaseEstimator):
         self._partial_total_steps = total_steps
         self._hp = hp
         self.converged_ = best_converged
-        self.n_iter_ = best_epochs
+        self.n_iter_ = best_iters
         self.lower_bound_ = float(best_lower_bound)
         self.revivals_count_ = best_revivals
         self._sync_public_attributes(weights, means, covs, prec_factor, log_det_half)
@@ -357,19 +725,17 @@ class EGMM(DensityMixin, BaseEstimator):
 
     def partial_fit(self, X: np.ndarray | torch.Tensor, y: Any = None) -> EGMM:
         dtype = self._resolve_dtype()
-        N_chunk, D = X.shape if isinstance(X, torch.Tensor) else np.asarray(X).shape
+        N_chunk, D = self._extract_array_shape(X)
         if not hasattr(self, "_x_mean_f64"):
             device = self._resolve_device(N_chunk, D)
-            X_f64 = self._to_float64_tensor(X, device=device)
             self.n_features_in_ = D
             self._device_t = device
             self._dtype_t = dtype
-            self._x_mean_f64 = X_f64.mean(dim=0)
-            self._x_std_f64 = X_f64.std(dim=0, unbiased=False).clamp_min(1e-12)
-            self._log_jac_t = (-torch.log(self._x_std_f64).sum()).to(dtype=dtype)
-            X_std = self._standardize(X_f64, target_dtype=dtype)
+            X_std, _, _ = self._fit_standardizer_and_transform(X, device=device, target_dtype=dtype)
             gen = self._make_generator(device)
-            self._M_t, self._S_t, self._Q_t = self._initialize_moments(X_std, generator=gen)
+            self._M_t, self._S_t, self._Q_t = self._initialize_moments(
+                X_std, generator=gen, out_dtype=torch.float64
+            )
             self._hp = auto_hyperparameters(
                 n_samples=max(N_chunk * 10, 4096),
                 n_components=self.n_components,
@@ -386,15 +752,13 @@ class EGMM(DensityMixin, BaseEstimator):
             self.n_iter_ = 0
             self.converged_ = False
         else:
-            X_f64 = self._to_float64_tensor(X, device=self._device_t)
-            X_std = self._standardize(X_f64, target_dtype=self._dtype_t)
+            X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
 
-        weights, means, covs, prec_factor, log_det_half = moments_to_params_and_precisions(
+        weights, means, covs, prec_factor, log_det_half = self._moments_to_estep_params(
             self._M_t,
             self._S_t,
             self._Q_t,
-            covariance_type=self.covariance_type,
-            reg_covar=self.reg_covar,
+            estep_dtype=self._dtype_t,
         )
 
         bs = N_chunk if self.batch_size == "auto" else min(N_chunk, int(self.batch_size))
@@ -408,6 +772,7 @@ class EGMM(DensityMixin, BaseEstimator):
                 covariance_type=self.covariance_type,
                 prec_factor=prec_factor,
                 log_det_half=log_det_half,
+                stats_dtype=torch.float64,
             )
             last_lb = float(batch_lb.item()) + float(self._log_jac_t.item())
             alpha_t = compute_cosine_alpha(
@@ -417,9 +782,9 @@ class EGMM(DensityMixin, BaseEstimator):
                 self._hp.alpha_min,
             )
             one_minus = 1.0 - alpha_t
-            self._M_t = one_minus * self._M_t + alpha_t * m_bar
-            self._S_t = one_minus * self._S_t + alpha_t * s_bar
-            self._Q_t = one_minus * self._Q_t + alpha_t * q_bar
+            self._M_t = one_minus * self._M_t + alpha_t * m_bar.to(torch.float64)
+            self._S_t = one_minus * self._S_t + alpha_t * s_bar.to(torch.float64)
+            self._Q_t = one_minus * self._Q_t + alpha_t * q_bar.to(torch.float64)
             if self.revive_dead and (self._partial_step + 1) % self._hp.revive_every == 0:
                 self._M_t, self._S_t, self._Q_t, n_rev = revive_dead_components(
                     self._M_t,
@@ -430,12 +795,11 @@ class EGMM(DensityMixin, BaseEstimator):
                     dead_ratio=self.dead_ratio,
                 )
                 self.revivals_count_ += n_rev
-            weights, means, covs, prec_factor, log_det_half = moments_to_params_and_precisions(
+            weights, means, covs, prec_factor, log_det_half = self._moments_to_estep_params(
                 self._M_t,
                 self._S_t,
                 self._Q_t,
-                covariance_type=self.covariance_type,
-                reg_covar=self.reg_covar,
+                estep_dtype=self._dtype_t,
             )
             self._partial_step += 1
 
@@ -446,8 +810,7 @@ class EGMM(DensityMixin, BaseEstimator):
 
     def _estimate_weighted_log_prob(self, X: np.ndarray | torch.Tensor) -> torch.Tensor:
         check_is_fitted(self, ["weights_", "means_", "covariances_"])
-        X_f64 = self._to_float64_tensor(X, device=self._device_t)
-        X_std = self._standardize(X_f64, target_dtype=self._dtype_t)
+        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
         log_prob = compute_log_gaussian_prob_from_precisions(
             X_std,
             self._means_std_t,

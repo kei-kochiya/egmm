@@ -5,3 +5,15 @@ __pycache__/
 data/
 dist/
 build/
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+paper/*.pdf
+*.tmp
+.DS_Store
+Thumbs.db

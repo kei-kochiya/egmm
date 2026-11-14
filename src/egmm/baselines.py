@@ -65,8 +65,8 @@ class TorchBatchGMM(EGMM):
         max_iters: int,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float, int, bool]:
         N = X_std.shape[0]
-        weights, means, covs, prec_factor, log_det_half = moments_to_params_and_precisions(
-            M, S, Q, covariance_type=self.covariance_type, reg_covar=self.reg_covar
+        weights, means, covs, prec_factor, log_det_half = self._moments_to_estep_params(
+            M, S, Q, estep_dtype=X_std.dtype
         )
         prev_lb = -math.inf
         converged = False
@@ -76,7 +76,7 @@ class TorchBatchGMM(EGMM):
             M_acc = torch.zeros_like(M)
             S_acc = torch.zeros_like(S)
             Q_acc = torch.zeros_like(Q)
-            ll_sum = 0.0
+            ll_sum = torch.zeros((), device=X_std.device, dtype=torch.float64)
 
             for start in range(0, N, self.chunk_size):
                 end = min(N, start + self.chunk_size)
@@ -89,18 +89,19 @@ class TorchBatchGMM(EGMM):
                     covariance_type=self.covariance_type,
                     prec_factor=prec_factor,
                     log_det_half=log_det_half,
+                    stats_dtype=M.dtype,
                 )
                 frac = bsz / N
-                M_acc += m_bar * frac
-                S_acc += s_bar * frac
-                Q_acc += q_bar * frac
-                ll_sum += float(batch_lb.item()) * bsz
+                M_acc += m_bar.to(M.dtype) * frac
+                S_acc += s_bar.to(S.dtype) * frac
+                Q_acc += q_bar.to(Q.dtype) * frac
+                ll_sum = ll_sum + batch_lb.to(torch.float64) * bsz
 
             M, S, Q = M_acc, S_acc, Q_acc
-            weights, means, covs, prec_factor, log_det_half = moments_to_params_and_precisions(
-                M, S, Q, covariance_type=self.covariance_type, reg_covar=self.reg_covar
+            weights, means, covs, prec_factor, log_det_half = self._moments_to_estep_params(
+                M, S, Q, estep_dtype=X_std.dtype
             )
-            lb = (ll_sum / N) + float(self._log_jac_t.item())
+            lb = (float(ll_sum.item()) / N) + float(self._log_jac_t.item())
             iters_done = it + 1
             if it >= 1 and abs(lb - prev_lb) < self.tol:
                 converged = True
@@ -117,7 +118,7 @@ class TorchBatchGMM(EGMM):
 
         for init_idx in range(max(1, self.n_init)):
             gen = self._make_generator(device, seed_offset=init_idx * 9973)
-            M0, S0, Q0 = self._initialize_moments(X_std, generator=gen)
+            M0, S0, Q0 = self._initialize_moments(X_std, generator=gen, out_dtype=torch.float64)
             res = self._run_batch_em(X_std, M0, S0, Q0, max_iters=self.max_iter)
             if res[8] > best_lb or best_res is None:
                 best_lb = res[8]

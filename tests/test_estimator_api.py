@@ -112,3 +112,35 @@ def test_egmm_cuda_and_partial_fit(cov_type):
     for chunk in np.array_split(X, 4):
         est_pf.partial_fit(chunk)
     assert np.isfinite(est_pf.score(X))
+
+
+def test_egmm_mixed_precision_moments_prevent_cancellation():
+    rng = np.random.default_rng(7)
+    # 90% wide cluster around 0, 10% tight cluster at +25: standardized E[x^2] - E[x]^2
+    # would suffer catastrophic cancellation if M, S, Q were accumulated in float32.
+    x_wide = rng.normal(loc=0.0, scale=1.0, size=(1800, 3))
+    x_tight = rng.normal(loc=25.0, scale=1e-2, size=(200, 3))
+    X = np.vstack([x_wide, x_tight])
+    rng.shuffle(X)
+
+    est = EGMM(
+        n_components=2,
+        covariance_type="full",
+        dtype="float32",
+        reg_covar=1e-9,
+        max_epochs=8,
+        random_state=7,
+        device="cpu",
+    ).fit(X)
+
+    assert est._M_t.dtype == torch.float64
+    assert est._S_t.dtype == torch.float64
+    assert est._Q_t.dtype == torch.float64
+    assert est._means_std_t.dtype == torch.float32
+    assert est._prec_factor_std_t.dtype == torch.float32
+
+    tight_k = int(np.argmax(est.means_[:, 0]))
+    recovered_var = float(np.diag(est.covariances_[tight_k]).mean())
+    # True variance of tight cluster is (1e-2)^2 = 1e-4; float64 moments should preserve scale accurately.
+    assert 3e-5 < recovered_var < 3e-4
+

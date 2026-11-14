@@ -114,10 +114,17 @@ def e_step_batch(
     covariance_type: CovarianceType = "full",
     prec_factor: torch.Tensor | None = None,
     log_det_half: torch.Tensor | None = None,
+    stats_dtype: torch.dtype | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Run batched E-step and return (r, mean_log_prob, m_bar, s_bar, q_bar)."""
+    """Run batched E-step with centered sufficient-statistics accumulation.
+
+    Centering around the batch mean (``diag``) or component means (``full``) prevents
+    floating-point offset cancellation when ``X`` is in float32 and statistics are
+    accumulated in float64 via ``stats_dtype``. Returns ``(r, mean_log_prob, m_bar, s_bar, q_bar)``.
+    """
     _validate_cov_type(covariance_type)
     B, D = X.shape
+    K = means.shape[0]
     if prec_factor is None or log_det_half is None:
         if covariances is None:
             raise ValueError("Either covariances or (prec_factor, log_det_half) must be provided.")
@@ -133,19 +140,75 @@ def e_step_batch(
     log_prob_norm = torch.logsumexp(weighted_log_prob, dim=1)
     r = torch.exp(weighted_log_prob - log_prob_norm.unsqueeze(1))
 
+    out_dtype = X.dtype if stats_dtype is None else stats_dtype
     inv_b = 1.0 / B
-    m_bar = r.sum(dim=0) * inv_b
-    s_bar = (r.T @ X) * inv_b
-    if covariance_type == "diag":
-        q_bar = (r.T @ (X * X)) * inv_b
-    else:
-        # Weighted outer products: sum_b r_{bk} x_b x_b^T / B via batched GEMM.
-        rX = r.T.unsqueeze(-1) * X.unsqueeze(0)  # (K, B, D)
-        q_bar = torch.bmm(
-            rX.transpose(-1, -2), X.unsqueeze(0).expand(means.shape[0], B, D)
-        ) * inv_b
+    m_bar = (r.sum(dim=0) * inv_b).to(out_dtype)
 
+    if covariance_type == "diag":
+        xb_mean = X.mean(dim=0)
+        Xc = X - xb_mean.unsqueeze(0)
+        delta_s = ((r.T @ Xc) * inv_b).to(out_dtype)
+        var_c = ((r.T @ (Xc * Xc)) * inv_b).to(out_dtype)
+        xb_out = xb_mean.to(out_dtype)
+        s_bar = m_bar.unsqueeze(-1) * xb_out.unsqueeze(0) + delta_s
+        q_bar = (
+            var_c
+            + m_bar.unsqueeze(-1) * (xb_out * xb_out).unsqueeze(0)
+            + xb_out.unsqueeze(0) * delta_s
+            + delta_s * xb_out.unsqueeze(0)
+        )
+        return r, log_prob_norm.mean(), m_bar, s_bar, q_bar
+
+    means_e = means.to(X.dtype) if means.dtype != X.dtype else means
+    means_out = means.to(out_dtype) if means.dtype != out_dtype else means
+    max_elems = 24_000_000
+    chunk_b = max(1, min(B, max_elems // max(1, K * D)))
+    delta_accum = torch.zeros((K, D), device=X.device, dtype=out_dtype)
+    cov_accum = torch.zeros((K, D, D), device=X.device, dtype=out_dtype)
+    r_T = r.T
+
+    for st in range(0, B, chunk_b):
+        en = min(B, st + chunk_b)
+        Xc = X[st:en]
+        rc = r_T[:, st:en]
+        diff = Xc.unsqueeze(0) - means_e.unsqueeze(1)
+        r_diff = rc.unsqueeze(-1) * diff
+        delta_accum = delta_accum + r_diff.sum(dim=1).to(out_dtype)
+        cov_accum = cov_accum + torch.bmm(r_diff.transpose(-1, -2), diff).to(out_dtype)
+
+    delta_out = delta_accum * inv_b
+    cov_out = cov_accum * inv_b
+    s_bar = m_bar.unsqueeze(-1) * means_out + delta_out
+    q_bar = (
+        cov_out
+        + torch.bmm(means_out.unsqueeze(-1), s_bar.unsqueeze(-2))
+        + torch.bmm(delta_out.unsqueeze(-1), means_out.unsqueeze(-2))
+    )
     return r, log_prob_norm.mean(), m_bar, s_bar, q_bar
+
+
+def _repair_non_psd_covariances(
+    covs: torch.Tensor,
+    covs_reg: torch.Tensor,
+    bad_mask: torch.Tensor,
+    reg_covar: float,
+) -> torch.Tensor:
+    """Repair non-PD covariance matrices using float64 eigh + condition-safe floor."""
+    bad_covs = covs[bad_mask].to(torch.float64)
+    eigvals, eigvecs = torch.linalg.eigh(bad_covs)
+    if covs.dtype == torch.float32:
+        max_eig = eigvals[:, -1:].clamp_min(1.0)
+        floor = torch.maximum(
+            torch.full_like(max_eig, reg_covar), 2e-6 * max_eig
+        )
+    else:
+        floor = torch.full_like(eigvals[:, -1:], reg_covar)
+    eigvals = torch.maximum(eigvals, floor)
+    repaired = torch.bmm(eigvecs * eigvals.unsqueeze(-2), eigvecs.transpose(-1, -2))
+    repaired = 0.5 * (repaired + repaired.transpose(-1, -2))
+    covs_reg = covs_reg.clone()
+    covs_reg[bad_mask] = repaired.to(dtype=covs.dtype)
+    return covs_reg
 
 
 def moments_to_params(
@@ -177,11 +240,7 @@ def moments_to_params(
     _, info = torch.linalg.cholesky_ex(covs_reg)
     bad_mask = info != 0
     if bad_mask.any():
-        bad_covs = covs[bad_mask]
-        eigvals, eigvecs = torch.linalg.eigh(bad_covs)
-        eigvals = eigvals.clamp_min(0.0) + reg_covar
-        repaired = torch.bmm(eigvecs * eigvals.unsqueeze(-2), eigvecs.transpose(-1, -2))
-        covs_reg[bad_mask] = 0.5 * (repaired + repaired.transpose(-1, -2))
+        covs_reg = _repair_non_psd_covariances(covs, covs_reg, bad_mask, reg_covar)
 
     return weights, means, covs_reg
 
@@ -192,10 +251,13 @@ def moments_to_params_and_precisions(
     Q: torch.Tensor,
     covariance_type: CovarianceType = "full",
     reg_covar: float = 1e-6,
+    allow_sync: bool = True,
+    fast_cholesky_f32: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Single-pass projection from (M, S, Q) to (weights, means, covs, prec_factor, log_det_half).
 
-    Avoids running a duplicate Cholesky decomposition for ``full`` covariance.
+    Supports branchless ``allow_sync=False`` diagonal fallback (CUDA-Graph capturable) and
+    optional float32 inner Cholesky decomposition via ``fast_cholesky_f32=True``.
     """
     _validate_cov_type(covariance_type)
     M_safe = M.clamp_min(1e-12)
@@ -215,19 +277,30 @@ def moments_to_params_and_precisions(
     eye_d = torch.eye(D, device=covs.device, dtype=covs.dtype)
     covs_reg = covs + reg_covar * eye_d.unsqueeze(0)
 
-    L_cov, info = torch.linalg.cholesky_ex(covs_reg)
-    bad_mask = info != 0
-    if bad_mask.any():
-        bad_covs = covs[bad_mask]
-        eigvals, eigvecs = torch.linalg.eigh(bad_covs)
-        eigvals = eigvals.clamp_min(0.0) + reg_covar
-        repaired = torch.bmm(eigvecs * eigvals.unsqueeze(-2), eigvecs.transpose(-1, -2))
-        covs_reg[bad_mask] = 0.5 * (repaired + repaired.transpose(-1, -2))
-        L_cov = torch.linalg.cholesky(covs_reg)
+    chol_dtype = torch.float32 if fast_cholesky_f32 else covs.dtype
+    chol_in = covs_reg.to(chol_dtype) if chol_dtype != covs_reg.dtype else covs_reg
+    eye_chol = torch.eye(D, device=covs.device, dtype=chol_dtype)
+
+    L_cov, info = torch.linalg.cholesky_ex(chol_in)
+    if not allow_sync:
+        bad = (info != 0).view(K, 1, 1)
+        diag_safe = torch.diagonal(chol_in, dim1=-2, dim2=-1).clamp_min(reg_covar)
+        L_cov = torch.where(bad, torch.diag_embed(torch.sqrt(diag_safe)), L_cov)
+    elif (info != 0).any():
+        covs_reg = _repair_non_psd_covariances(covs, covs_reg, info != 0, reg_covar)
+        chol_in = covs_reg.to(chol_dtype) if chol_dtype != covs_reg.dtype else covs_reg
+        L_cov, info = torch.linalg.cholesky_ex(chol_in)
+        jitter = max(reg_covar, 1e-5)
+        while (info != 0).any() and jitter <= 1e-1:
+            still_bad = info != 0
+            covs_reg[still_bad] = covs_reg[still_bad] + jitter * eye_d.unsqueeze(0)
+            chol_in = covs_reg.to(chol_dtype) if chol_dtype != covs_reg.dtype else covs_reg
+            L_cov, info = torch.linalg.cholesky_ex(chol_in)
+            jitter *= 10.0
 
     diag = torch.diagonal(L_cov, dim1=-2, dim2=-1)
     log_det_half = -torch.log(diag).sum(dim=-1)
-    L_inv = torch.linalg.solve_triangular(L_cov, eye_d.expand(K, D, D), upper=False)
+    L_inv = torch.linalg.solve_triangular(L_cov, eye_chol.expand(K, D, D), upper=False)
     return weights, means, covs_reg, L_inv, log_det_half
 
 
@@ -255,30 +328,42 @@ def init_kmeans_pp(
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
     """Fast k-means++ seeding on tensor X (N, D) returning initial centers (K, D)."""
+    orig_device = X.device
+    orig_dtype = X.dtype
     N, D = X.shape
     if n_components > N:
-        # Sample with replacement if dataset smaller than K
-        idx = torch.randint(0, N, (n_components,), generator=generator, device=X.device)
+        idx = torch.randint(0, N, (n_components,), generator=generator, device=orig_device)
         return X[idx].clone()
 
-    centers = torch.empty((n_components, D), device=X.device, dtype=X.dtype)
-    first_idx = int(torch.randint(0, N, (1,), generator=generator, device=X.device).item())
-    centers[0] = X[first_idx]
+    # For seed buffers on CUDA, running the sequential K-step loop on CPU avoids K*2 sync stalls.
+    work_X = X.detach().cpu() if (orig_device.type == "cuda" and N <= 8192) else X
+    work_gen = None
+    if generator is not None and work_X.device != orig_device:
+        work_gen = torch.Generator(device="cpu")
+        work_gen.manual_seed(int(generator.initial_seed()))
+    else:
+        work_gen = generator
 
-    x_sq = (X * X).sum(dim=1)
+    centers = torch.empty((n_components, D), device=work_X.device, dtype=orig_dtype)
+    first_idx = int(torch.randint(0, N, (1,), generator=work_gen, device=work_X.device).item())
+    centers[0] = work_X[first_idx]
+
+    x_sq = (work_X * work_X).sum(dim=1)
     c0_sq = (centers[0] * centers[0]).sum()
-    min_dist_sq = (x_sq + c0_sq - 2.0 * (X @ centers[0])).clamp_min_(0.0)
+    min_dist_sq = (x_sq + c0_sq - 2.0 * (work_X @ centers[0])).clamp_min_(0.0)
 
     for k in range(1, n_components):
         total = min_dist_sq.sum()
         if not torch.isfinite(total) or total <= 0.0:
-            next_idx = int(torch.randint(0, N, (1,), generator=generator, device=X.device).item())
+            next_idx = int(
+                torch.randint(0, N, (1,), generator=work_gen, device=work_X.device).item()
+            )
         else:
             probs = min_dist_sq / total
-            next_idx = int(torch.multinomial(probs, 1, generator=generator).item())
-        centers[k] = X[next_idx]
+            next_idx = int(torch.multinomial(probs, 1, generator=work_gen).item())
+        centers[k] = work_X[next_idx]
         ck_sq = (centers[k] * centers[k]).sum()
-        dist_sq = (x_sq + ck_sq - 2.0 * (X @ centers[k])).clamp_min_(0.0)
+        dist_sq = (x_sq + ck_sq - 2.0 * (work_X @ centers[k])).clamp_min_(0.0)
         min_dist_sq = torch.minimum(min_dist_sq, dist_sq)
 
-    return centers
+    return centers.to(device=orig_device, dtype=orig_dtype)

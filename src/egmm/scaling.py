@@ -13,6 +13,10 @@ class EGMMHyperparams:
     alpha_0: float
     alpha_min: float
     revive_every: int
+    init_usage_scale: float = 1.0
+    polish_steps: int = 0
+    revive_points: int = 0
+    steps_per_epoch: int = 1
 
 
 def compute_cosine_alpha(
@@ -41,61 +45,82 @@ def auto_hyperparameters(
     alpha: float | str = "auto",
     revive_every: int | str = "auto",
 ) -> EGMMHyperparams:
-    """Choose batch size, epoch budget, EMA peak decay, and revival cadence.
+    """Choose batch size, epoch budget, EMA peak decay, initial moment scale, and polish budget.
 
-    Default rules scale smoothly with (N, K, D); empirical power-law constants
-    are calibrated via ``experiments/fit_scaling_laws.py`` on held-out synthetic regimes.
+    Uses smooth regime adaptation via effective batch degrees of freedom ``bs / (D * K)``
+    to prevent under-determined covariance blowup when ``D * K`` is large relative to ``bs``.
     """
     N = max(1, int(n_samples))
     K = max(1, int(n_components))
     D = max(1, int(n_features))
+    is_auto_alpha = alpha == "auto"
+    is_auto_epochs = max_epochs == "auto"
 
-    if max_epochs == "auto":
-        # Small N needs more epochs to get enough gradient/EMA updates; large N converges in 2-4 epochs.
-        if N < 4000:
-            epochs = 12
-        elif N < 20000:
-            epochs = 6
-        elif N < 100000:
-            epochs = 4
+    if covariance_type == "diag":
+        if batch_size == "auto":
+            b_min = min(N, max(256, 16 * K))
+            bs_tgt = max(b_min, min(N, 16384, max(256, N // 6)))
+            steps_ep = max(1, N // bs_tgt)
+            bs = max(1, N // steps_ep)
         else:
-            epochs = 3
-    else:
-        epochs = max(1, int(max_epochs))
+            bs = max(1, min(N, int(batch_size)))
+            steps_ep = max(1, math.ceil(N / bs))
 
-    if batch_size == "auto":
-        # Ensure each mini-batch has enough expected points per component (~32*K) without exceeding memory/steps.
-        if covariance_type == "full":
-            b_est = int(round(48.0 * (K ** 0.75) * (D ** 0.25) * ((N / 10000.0) ** 0.25)))
-            b_cap = 8192 if D <= 128 else 4096
+        if is_auto_epochs:
+            epochs = 3 if N < 30_000 else 2
+            if N < 10_000 and steps_ep < 5:
+                epochs = max(epochs, min(5, math.ceil(18 / steps_ep)))
         else:
-            b_est = int(round(64.0 * (K ** 0.75) * (D ** 0.15) * ((N / 10000.0) ** 0.25)))
-            b_cap = 16384
-        b_min = min(N, max(64, 4 * K))
-        # Ensure at least ~4 steps per epoch for small/medium N when possible
-        b_step_floor = max(64, N // 4) if N >= 256 else N
-        bs = max(b_min, min(N, b_cap, b_est, b_step_floor))
+            epochs = max(1, int(max_epochs))
+
+        total_steps = max(1, epochs * steps_ep)
+        alpha_0 = 0.42 if is_auto_alpha else float(alpha)
+        alpha_min = 0.10 * alpha_0
+        init_usage_scale = 1.0
+        rev_points = 0 if revive_every == "auto" else -1
+        rev_every = max(2, steps_ep // 2) if revive_every == "auto" else max(1, int(revive_every))
+        base_polish = 12 if (N <= 100_000 and is_auto_alpha) else 0
+        polish_steps = base_polish if is_auto_epochs else (0 if epochs <= 1 else min(base_polish, 2 * epochs))
     else:
-        bs = max(1, min(N, int(batch_size)))
+        if batch_size == "auto":
+            b_min = min(N, max(256, 16 * K))
+            if N < 3000:
+                b_min = min(b_min, max(128, N // 5))
+            b_floor = 128 if N < 3000 else 256
+            bs_tgt = max(b_min, min(N, 8192, max(b_floor, N // 9)))
+            steps_ep = max(1, N // bs_tgt)
+            bs = max(1, N // steps_ep)
+        else:
+            bs = max(1, min(N, int(batch_size)))
+            steps_ep = max(1, math.ceil(N / bs))
 
-    steps_per_epoch = max(1, math.ceil(N / bs))
-    total_steps = max(1, epochs * steps_per_epoch)
+        if is_auto_epochs:
+            if N < 15_000:
+                epochs = max(4, min(7, math.ceil(30 / steps_ep)))
+            elif N < 100_000:
+                epochs = 4
+            else:
+                epochs = 2
+        else:
+            epochs = max(1, int(max_epochs))
 
-    if alpha == "auto":
-        # Larger step count -> smaller peak alpha_0 so EMA memory horizon spans ~1/3 epoch to 1 epoch.
-        # Ensure alpha_0 stays well-behaved in [0.05, 0.55].
-        ratio = bs / max(1.0, float(N))
-        a0 = 1.8 * (ratio ** 0.55) * (max(1, epochs) ** -0.25)
-        alpha_0 = float(min(0.55, max(0.05, a0)))
-    else:
-        alpha_0 = float(alpha)
+        total_steps = max(1, epochs * steps_ep)
+        eff_df = bs / max(1.0, float(D * K))
+        t_df = max(0.0, min(1.0, (eff_df - 1.5) / 1.5))
 
-    alpha_min = 0.1 * alpha_0
+        init_usage_scale = (1.0 - 0.75 * t_df) if is_auto_alpha else 1.0
+        if is_auto_alpha:
+            alpha0_base = 0.36 + 0.56 * t_df
+            alpha_0 = float(min(0.85, max(0.32, alpha0_base * (total_steps ** -0.04))))
+            alpha_min = (0.10 - 0.05 * t_df) * alpha_0
+        else:
+            alpha_0 = float(alpha)
+            alpha_min = 0.1 * alpha_0
 
-    if revive_every == "auto":
-        rev_every = max(2, steps_per_epoch // 2)
-    else:
-        rev_every = max(1, int(revive_every))
+        rev_points = 4 if revive_every == "auto" else -1
+        rev_every = max(2, steps_ep // 2) if revive_every == "auto" else max(1, int(revive_every))
+        base_polish = ((6 if N <= 25_000 else 5) if N <= 100_000 else 0) if is_auto_alpha else 0
+        polish_steps = base_polish if is_auto_epochs else (0 if epochs <= 1 else min(base_polish, epochs))
 
     return EGMMHyperparams(
         batch_size=bs,
@@ -103,4 +128,8 @@ def auto_hyperparameters(
         alpha_0=alpha_0,
         alpha_min=alpha_min,
         revive_every=rev_every,
+        init_usage_scale=init_usage_scale,
+        polish_steps=polish_steps,
+        revive_points=rev_points,
+        steps_per_epoch=steps_ep,
     )
