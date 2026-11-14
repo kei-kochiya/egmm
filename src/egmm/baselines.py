@@ -1,0 +1,323 @@
+"""Fair PyTorch baselines and ablations sharing exact kernels with EGMM."""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+import numpy as np
+import torch
+
+from egmm.estimator import EGMM
+from egmm.kernels import (
+    CovarianceType,
+    e_step_batch,
+    init_kmeans_pp,
+    moments_to_params_and_precisions,
+    params_to_moments,
+)
+from egmm.scaling import compute_cosine_alpha
+
+
+class TorchBatchGMM(EGMM):
+    """Exact full-batch EM running in the same PyTorch GPU/CPU engine as EGMM."""
+
+    def __init__(
+        self,
+        n_components: int = 1,
+        covariance_type: CovarianceType = "full",
+        tol: float = 1e-3,
+        reg_covar: float = 1e-6,
+        max_iter: int = 100,
+        chunk_size: int = 16384,
+        n_init: int = 1,
+        init_params: str = "kmeans++",
+        device: str = "auto",
+        dtype: str = "float32",
+        random_state: int | None = None,
+        verbose: int = 0,
+    ) -> None:
+        super().__init__(
+            n_components=n_components,
+            covariance_type=covariance_type,
+            tol=tol,
+            reg_covar=reg_covar,
+            max_epochs=max_iter,
+            batch_size=chunk_size,
+            alpha=1.0,
+            revive_dead=False,
+            n_init=n_init,
+            init_params=init_params,
+            device=device,
+            dtype=dtype,
+            random_state=random_state,
+            verbose=verbose,
+        )
+        self.max_iter = max_iter
+        self.chunk_size = chunk_size
+
+    def _run_batch_em(
+        self,
+        X_std: torch.Tensor,
+        M: torch.Tensor,
+        S: torch.Tensor,
+        Q: torch.Tensor,
+        max_iters: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float, int, bool]:
+        N = X_std.shape[0]
+        weights, means, covs, prec_factor, log_det_half = moments_to_params_and_precisions(
+            M, S, Q, covariance_type=self.covariance_type, reg_covar=self.reg_covar
+        )
+        prev_lb = -math.inf
+        converged = False
+        iters_done = 0
+
+        for it in range(max_iters):
+            M_acc = torch.zeros_like(M)
+            S_acc = torch.zeros_like(S)
+            Q_acc = torch.zeros_like(Q)
+            ll_sum = 0.0
+
+            for start in range(0, N, self.chunk_size):
+                end = min(N, start + self.chunk_size)
+                Xb = X_std[start:end]
+                bsz = end - start
+                _, batch_lb, m_bar, s_bar, q_bar = e_step_batch(
+                    Xb,
+                    weights,
+                    means,
+                    covariance_type=self.covariance_type,
+                    prec_factor=prec_factor,
+                    log_det_half=log_det_half,
+                )
+                frac = bsz / N
+                M_acc += m_bar * frac
+                S_acc += s_bar * frac
+                Q_acc += q_bar * frac
+                ll_sum += float(batch_lb.item()) * bsz
+
+            M, S, Q = M_acc, S_acc, Q_acc
+            weights, means, covs, prec_factor, log_det_half = moments_to_params_and_precisions(
+                M, S, Q, covariance_type=self.covariance_type, reg_covar=self.reg_covar
+            )
+            lb = (ll_sum / N) + float(self._log_jac_t.item())
+            iters_done = it + 1
+            if it >= 1 and abs(lb - prev_lb) < self.tol:
+                converged = True
+                prev_lb = lb
+                break
+            prev_lb = lb
+
+        return M, S, Q, weights, means, covs, prec_factor, log_det_half, prev_lb, iters_done, converged
+
+    def fit(self, X: np.ndarray | torch.Tensor, y: Any = None) -> TorchBatchGMM:
+        X_std, device, dtype, N, D = self._prepare_fit_data(X)
+        best_lb = -math.inf
+        best_res = None
+
+        for init_idx in range(max(1, self.n_init)):
+            gen = self._make_generator(device, seed_offset=init_idx * 9973)
+            M0, S0, Q0 = self._initialize_moments(X_std, generator=gen)
+            res = self._run_batch_em(X_std, M0, S0, Q0, max_iters=self.max_iter)
+            if res[8] > best_lb or best_res is None:
+                best_lb = res[8]
+                best_res = res
+
+        assert best_res is not None
+        M, S, Q, weights, means, covs, prec_factor, log_det_half, lb, iters_done, converged = best_res
+        self._M_t, self._S_t, self._Q_t = M, S, Q
+        self.converged_ = converged
+        self.n_iter_ = iters_done
+        self.lower_bound_ = float(lb)
+        self.revivals_count_ = 0
+        self._sync_public_attributes(weights, means, covs, prec_factor, log_det_half)
+        return self
+
+
+class CappeMoulinesOnlineGMM(EGMM):
+    """Cappé & Moulines (2009) Online EM with polynomial step size (t + t0)^(-rho)."""
+
+    def __init__(
+        self,
+        n_components: int = 1,
+        covariance_type: CovarianceType = "full",
+        tol: float = 1e-3,
+        reg_covar: float = 1e-6,
+        max_epochs: int | str = 5,
+        batch_size: int | str = 1024,
+        rho: float = 0.75,
+        t0: float = 2.0,
+        n_init: int = 1,
+        init_params: str = "kmeans++",
+        device: str = "auto",
+        dtype: str = "float32",
+        random_state: int | None = None,
+        verbose: int = 0,
+    ) -> None:
+        super().__init__(
+            n_components=n_components,
+            covariance_type=covariance_type,
+            tol=tol,
+            reg_covar=reg_covar,
+            max_epochs=max_epochs,
+            batch_size=batch_size,
+            alpha=1.0,
+            revive_dead=False,
+            n_init=n_init,
+            init_params=init_params,
+            device=device,
+            dtype=dtype,
+            random_state=random_state,
+            verbose=verbose,
+        )
+        self.rho = rho
+        self.t0 = t0
+
+    def _step_alpha(self, step: int, total_steps: int, hp: Any) -> float:
+        return float(min(1.0, max(1e-4, (step + self.t0) ** (-self.rho))))
+
+
+class NaiveMinibatchGMM(EGMM):
+    """Ablation: constant-alpha EMA without cosine annealing or dead-component revival."""
+
+    def __init__(
+        self,
+        n_components: int = 1,
+        covariance_type: CovarianceType = "full",
+        tol: float = 1e-3,
+        reg_covar: float = 1e-6,
+        max_epochs: int | str = "auto",
+        batch_size: int | str = "auto",
+        alpha: float | str = 0.15,
+        n_init: int = 1,
+        init_params: str = "kmeans++",
+        device: str = "auto",
+        dtype: str = "float32",
+        random_state: int | None = None,
+        verbose: int = 0,
+    ) -> None:
+        super().__init__(
+            n_components=n_components,
+            covariance_type=covariance_type,
+            tol=tol,
+            reg_covar=reg_covar,
+            max_epochs=max_epochs,
+            batch_size=batch_size,
+            alpha=alpha,
+            revive_dead=False,
+            n_init=n_init,
+            init_params=init_params,
+            device=device,
+            dtype=dtype,
+            random_state=random_state,
+            verbose=verbose,
+        )
+
+    def _step_alpha(self, step: int, total_steps: int, hp: Any) -> float:
+        return float(hp.alpha_0)
+
+
+class EMeansInitGMM(TorchBatchGMM):
+    """Ablation: e-means style mini-batch EMA k-means warm-start + batch EM refinement."""
+
+    def __init__(
+        self,
+        n_components: int = 1,
+        covariance_type: CovarianceType = "full",
+        tol: float = 1e-3,
+        reg_covar: float = 1e-6,
+        kmeans_epochs: int = 2,
+        em_iters: int = 10,
+        batch_size: int = 1024,
+        alpha_0: float = 0.3,
+        device: str = "auto",
+        dtype: str = "float32",
+        random_state: int | None = None,
+    ) -> None:
+        super().__init__(
+            n_components=n_components,
+            covariance_type=covariance_type,
+            tol=tol,
+            reg_covar=reg_covar,
+            max_iter=em_iters,
+            chunk_size=16384,
+            device=device,
+            dtype=dtype,
+            random_state=random_state,
+        )
+        self.kmeans_epochs = kmeans_epochs
+        self.em_iters = em_iters
+        self.batch_size = batch_size
+        self.alpha_0 = alpha_0
+
+    def fit(self, X: np.ndarray | torch.Tensor, y: Any = None) -> EMeansInitGMM:
+        X_std, device, dtype, N, D = self._prepare_fit_data(X)
+        K = self.n_components
+        gen = self._make_generator(device)
+
+        n_seed = min(N, max(2048, 32 * K))
+        seed_idx = torch.randperm(N, generator=gen, device=device)[:n_seed]
+        centers = init_kmeans_pp(X_std[seed_idx], K, generator=gen)
+
+        bs = min(N, self.batch_size)
+        steps_per_epoch = max(1, math.ceil(N / bs))
+        total_steps = max(1, self.kmeans_epochs * steps_per_epoch)
+
+        N_ema = torch.full((K,), 1.0 / K, device=device, dtype=dtype)
+        S_ema = N_ema.unsqueeze(-1) * centers
+
+        step = 0
+        for _ in range(self.kmeans_epochs):
+            perm = torch.randperm(N, generator=gen, device=device)
+            for start in range(0, N, bs):
+                Xb = X_std[perm[start : min(N, start + bs)]]
+                assign = torch.argmin(torch.cdist(Xb, centers), dim=1)
+                one_hot = torch.nn.functional.one_hot(assign, num_classes=K).to(dtype=dtype)
+                n_bar = one_hot.mean(dim=0)
+                s_bar = (one_hot.T @ Xb) / Xb.shape[0]
+                a = compute_cosine_alpha(step, total_steps, self.alpha_0, 0.1 * self.alpha_0)
+                N_ema = (1.0 - a) * N_ema + a * n_bar
+                S_ema = (1.0 - a) * S_ema + a * s_bar
+                centers = S_ema / N_ema.clamp_min(1e-12).unsqueeze(-1)
+                step += 1
+
+        # Build empirical covariances from Voronoi partition on subsample/full data
+        n_cov = min(N, 32768)
+        X_cov = X_std[:n_cov]
+        assign = torch.argmin(torch.cdist(X_cov, centers), dim=1)
+        one_hot = torch.nn.functional.one_hot(assign, num_classes=K).to(dtype=dtype)
+        counts = one_hot.sum(dim=0)
+        global_var = X_cov.var(dim=0, unbiased=False).clamp_min(1e-2)
+        weights = torch.empty(K, device=device, dtype=dtype)
+        eye_d = torch.eye(D, device=device, dtype=dtype)
+        if self.covariance_type == "diag":
+            covs = torch.empty((K, D), device=device, dtype=dtype)
+        else:
+            covs = torch.empty((K, D, D), device=device, dtype=dtype)
+
+        for k in range(K):
+            cnt = int(counts[k].item())
+            if cnt >= 2:
+                pts = X_cov[assign == k]
+                diff = pts - centers[k].unsqueeze(0)
+                weights[k] = cnt / n_cov
+                if self.covariance_type == "diag":
+                    covs[k] = (diff * diff).mean(dim=0) + self.reg_covar
+                else:
+                    covs[k] = (diff.T @ diff) / cnt + self.reg_covar * eye_d
+            else:
+                weights[k] = max(1.0 / n_cov, 1e-3 / K)
+                covs[k] = (global_var + self.reg_covar) if self.covariance_type == "diag" else (torch.diag(global_var) + self.reg_covar * eye_d)
+
+        weights = weights / weights.sum()
+        M0, S0, Q0 = params_to_moments(weights, centers, covs, covariance_type=self.covariance_type)
+        M, S, Q, w, m, c, pf, ldh, lb, iters_done, converged = self._run_batch_em(
+            X_std, M0, S0, Q0, max_iters=self.em_iters
+        )
+        self._M_t, self._S_t, self._Q_t = M, S, Q
+        self.converged_ = converged
+        self.n_iter_ = iters_done
+        self.lower_bound_ = float(lb)
+        self.revivals_count_ = 0
+        self._sync_public_attributes(w, m, c, pf, ldh)
+        return self

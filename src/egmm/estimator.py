@@ -218,7 +218,12 @@ class EGMM(DensityMixin, BaseEstimator):
         self.precisions_ = p_orig_t.detach().cpu().numpy()
         self.precisions_cholesky_ = pc_orig_t.detach().cpu().numpy()
 
-    def fit(self, X: np.ndarray | torch.Tensor, y: Any = None) -> EGMM:
+    def _step_alpha(self, step: int, total_steps: int, hp: Any) -> float:
+        return compute_cosine_alpha(step, total_steps, hp.alpha_0, hp.alpha_min)
+
+    def _prepare_fit_data(
+        self, X: np.ndarray | torch.Tensor
+    ) -> tuple[torch.Tensor, torch.device, torch.dtype, int, int]:
         dtype = self._resolve_dtype()
         N, D = X.shape if isinstance(X, torch.Tensor) else np.asarray(X).shape
         device = self._resolve_device(N, D)
@@ -233,6 +238,10 @@ class EGMM(DensityMixin, BaseEstimator):
         self._x_std_f64 = X_f64.std(dim=0, unbiased=False).clamp_min(1e-12)
         self._log_jac_t = (-torch.log(self._x_std_f64).sum()).to(dtype=dtype)
         X_std = self._standardize(X_f64, target_dtype=dtype)
+        return X_std, device, dtype, N, D
+
+    def fit(self, X: np.ndarray | torch.Tensor, y: Any = None) -> EGMM:
+        X_std, device, dtype, N, D = self._prepare_fit_data(X)
 
         hp = auto_hyperparameters(
             n_samples=N,
@@ -287,9 +296,7 @@ class EGMM(DensityMixin, BaseEstimator):
                     epoch_ll_sum += float(batch_lb.item()) * bsz
                     epoch_seen += bsz
 
-                    alpha_t = compute_cosine_alpha(
-                        global_step, total_steps, hp.alpha_0, hp.alpha_min
-                    )
+                    alpha_t = self._step_alpha(global_step, total_steps, hp)
                     one_minus = 1.0 - alpha_t
                     M = one_minus * M + alpha_t * m_bar
                     S = one_minus * S + alpha_t * s_bar
