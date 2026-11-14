@@ -60,16 +60,34 @@ def compute_log_gaussian_prob_from_precisions(
     const = -0.5 * D * math.log(2.0 * math.pi)
 
     if covariance_type == "diag":
-        # Shift by batch mean for shift-invariance in quadratic expansion.
-        shift = X.mean(dim=0, keepdim=True)
-        Xc = X - shift
+        # Shift by component-mean centroid for shift-invariance in quadratic expansion
+        # (independent of batch chunk boundaries and O(K*D) rather than O(B*D)).
+        shift = means.mean(dim=0, keepdim=True)
         mc = means - shift
         prec = prec_factor * prec_factor  # (K, D)
-        quad_x = (Xc * Xc) @ prec.T  # (B, K)
-        cross = Xc @ (mc * prec).T  # (B, K)
+        mp_T = (mc * prec).T  # (D, K)
+        prec_T = prec.T  # (D, K)
         quad_m = (mc * mc * prec).sum(dim=1).unsqueeze(0)  # (1, K)
-        maha = (quad_x - 2.0 * cross + quad_m).clamp_min_(0.0)
-        return const + log_det_half.unsqueeze(0) - 0.5 * maha
+
+        elems_per_row = max(1, D + K)
+        chunk_b = max(1, min(B, max_work_elements // elems_per_row))
+        if chunk_b >= B:
+            Xc = X - shift
+            quad_x = (Xc * Xc) @ prec_T
+            cross = Xc @ mp_T
+            maha = (quad_x - 2.0 * cross + quad_m).clamp_min_(0.0)
+            return const + log_det_half.unsqueeze(0) - 0.5 * maha
+
+        out = torch.empty((B, K), device=X.device, dtype=X.dtype)
+        bias = const + log_det_half.unsqueeze(0)
+        for start in range(0, B, chunk_b):
+            end = min(B, start + chunk_b)
+            Xc = X[start:end] - shift
+            quad_x = (Xc * Xc) @ prec_T
+            cross = Xc @ mp_T
+            maha = (quad_x - 2.0 * cross + quad_m).clamp_min_(0.0)
+            out[start:end] = bias - 0.5 * maha
+        return out
 
     # Full covariance: L_inv has shape (K, D, D), so (X - mu_k) @ L_inv_k^T
     # A_mat maps (B, D) -> (B, K * D) in a single GEMM.
@@ -115,6 +133,7 @@ def e_step_batch(
     prec_factor: torch.Tensor | None = None,
     log_det_half: torch.Tensor | None = None,
     stats_dtype: torch.dtype | None = None,
+    max_work_elements: int = 24_000_000,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Run batched E-step with centered sufficient-statistics accumulation.
 
@@ -133,7 +152,12 @@ def e_step_batch(
         )
 
     log_prob = compute_log_gaussian_prob_from_precisions(
-        X, means, prec_factor, log_det_half, covariance_type=covariance_type
+        X,
+        means,
+        prec_factor,
+        log_det_half,
+        covariance_type=covariance_type,
+        max_work_elements=max_work_elements,
     )
     log_weights = torch.log(weights.clamp_min(1e-30))
     weighted_log_prob = log_prob + log_weights.unsqueeze(0)
@@ -146,9 +170,24 @@ def e_step_batch(
 
     if covariance_type == "diag":
         xb_mean = X.mean(dim=0)
-        Xc = X - xb_mean.unsqueeze(0)
-        delta_s = ((r.T @ Xc) * inv_b).to(out_dtype)
-        var_c = ((r.T @ (Xc * Xc)) * inv_b).to(out_dtype)
+        chunk_b = max(1, min(B, max_work_elements // max(1, D + K)))
+        if chunk_b >= B:
+            Xc = X - xb_mean.unsqueeze(0)
+            delta_s = ((r.T @ Xc) * inv_b).to(out_dtype)
+            var_c = ((r.T @ (Xc * Xc)) * inv_b).to(out_dtype)
+        else:
+            delta_accum = torch.zeros((K, D), device=X.device, dtype=out_dtype)
+            var_accum = torch.zeros((K, D), device=X.device, dtype=out_dtype)
+            r_T = r.T
+            xb_row = xb_mean.unsqueeze(0)
+            for st in range(0, B, chunk_b):
+                en = min(B, st + chunk_b)
+                Xc = X[st:en] - xb_row
+                rc = r_T[:, st:en]
+                delta_accum = delta_accum + (rc @ Xc).to(out_dtype)
+                var_accum = var_accum + (rc @ (Xc * Xc)).to(out_dtype)
+            delta_s = delta_accum * inv_b
+            var_c = var_accum * inv_b
         xb_out = xb_mean.to(out_dtype)
         s_bar = m_bar.unsqueeze(-1) * xb_out.unsqueeze(0) + delta_s
         q_bar = (
@@ -161,8 +200,7 @@ def e_step_batch(
 
     means_e = means.to(X.dtype) if means.dtype != X.dtype else means
     means_out = means.to(out_dtype) if means.dtype != out_dtype else means
-    max_elems = 24_000_000
-    chunk_b = max(1, min(B, max_elems // max(1, K * D)))
+    chunk_b = max(1, min(B, max_work_elements // max(1, K * D)))
     delta_accum = torch.zeros((K, D), device=X.device, dtype=out_dtype)
     cov_accum = torch.zeros((K, D, D), device=X.device, dtype=out_dtype)
     r_T = r.T

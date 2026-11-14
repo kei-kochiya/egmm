@@ -124,12 +124,21 @@ def plot_cd_ranks(csv_path: Path, out_path: Path) -> None:
 
     methods = [
         m
-        for m in ["EGMM", "TorchBatchGMM", "OnlineGMM_tuned", "NaiveMinibatchGMM", "EMeansInitGMM", "SklearnGMM"]
+        for m in [
+            "EGMM",
+            "TorchBatchGMM",
+            "StandardizedSklearnGMM",
+            "OnlineGMM_tuned",
+            "NaiveMinibatchGMM",
+            "EMeansInitGMM",
+            "SklearnGMM",
+        ]
         if m in piv_nll.columns
     ]
     label_map = {
         "EGMM": "e-GMM (Ours)",
-        "SklearnGMM": "SklearnGMM (CPU)",
+        "StandardizedSklearnGMM": "StdSklearnGMM (CPU)",
+        "SklearnGMM": "SklearnGMM (Raw CPU)",
         "TorchBatchGMM": "TorchBatchGMM (GPU)",
         "OnlineGMM_tuned": "OnlineGMM (tuned)",
         "EMeansInitGMM": "EMeansInitGMM",
@@ -175,31 +184,31 @@ def plot_cd_ranks(csv_path: Path, out_path: Path) -> None:
 
 
 def _repel_labels(
+    ax: plt.Axes,
     pts_x: np.ndarray,
     pts_y: np.ndarray,
     labels: list[str],
-    xlim: tuple[float, float],
-    ylim: tuple[float, float],
     seed_offsets: dict[str, tuple[float, float]],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Place scatter annotations without overlaps in normalized log-x / linear-y box space."""
-    lx0, lx1 = math.log10(xlim[0]), math.log10(xlim[1])
-    ly0, ly1 = ylim[0], ylim[1]
+    """Place scatter annotations without overlaps in exact [0, 1] axes coordinates."""
+    to_axes = ax.transData + ax.transAxes.inverted()
+    to_data = ax.transAxes + ax.transData.inverted()
 
-    px = (np.log10(pts_x) - lx0) / (lx1 - lx0)
-    py = (pts_y - ly0) / (ly1 - ly0)
+    pts_disp = to_axes.transform(np.column_stack([pts_x, pts_y]))
+    px = pts_disp[:, 0]
+    py = pts_disp[:, 1]
 
     tx = px.copy()
     ty = py.copy()
     for i, name in enumerate(labels):
-        dx, dy = seed_offsets.get(name, (0.02, 0.03))
-        tx[i] = np.clip(px[i] + dx, 0.06, 0.91)
-        ty[i] = np.clip(py[i] + dy, 0.05, 0.94)
+        dx, dy = seed_offsets.get(name, (0.02, 0.035))
+        tx[i] = np.clip(px[i] + dx, 0.06, 0.92)
+        ty[i] = np.clip(py[i] + dy, 0.05, 0.95)
 
-    widths = np.array([0.011 * len(lbl) + 0.022 for lbl in labels])
-    heights = np.full(len(labels), 0.044)
+    widths = np.array([0.0092 * len(lbl) + 0.018 for lbl in labels])
+    heights = np.full(len(labels), 0.042)
 
-    for _ in range(500):
+    for _ in range(700):
         forces_x = np.zeros(len(labels))
         forces_y = np.zeros(len(labels))
 
@@ -208,8 +217,8 @@ def _repel_labels(
             for j in range(i + 1, len(labels)):
                 dx = tx[i] - tx[j]
                 dy = ty[i] - ty[j]
-                req_x = 0.5 * (widths[i] + widths[j]) + 0.014
-                req_y = 0.5 * (heights[i] + heights[j]) + 0.010
+                req_x = 0.5 * (widths[i] + widths[j]) + 0.012
+                req_y = 0.5 * (heights[i] + heights[j]) + 0.009
                 if abs(dx) < req_x and abs(dy) < req_y:
                     ov_x = req_x - abs(dx)
                     ov_y = req_y - abs(dy)
@@ -218,39 +227,39 @@ def _repel_labels(
                     if abs(dy) < 1e-4:
                         sy = 1.0 if (i % 2 == 0) else -1.0
                     if ov_y < ov_x:
-                        forces_y[i] += 0.35 * sy * ov_y
-                        forces_y[j] -= 0.35 * sy * ov_y
+                        forces_y[i] += 0.36 * sy * ov_y
+                        forces_y[j] -= 0.36 * sy * ov_y
                         forces_x[i] += 0.08 * sx * ov_x
                         forces_x[j] -= 0.08 * sx * ov_x
                     else:
-                        forces_x[i] += 0.30 * sx * ov_x
-                        forces_x[j] -= 0.30 * sx * ov_x
-                        forces_y[i] += 0.12 * sy * ov_y
-                        forces_y[j] -= 0.12 * sy * ov_y
+                        forces_x[i] += 0.32 * sx * ov_x
+                        forces_x[j] -= 0.32 * sx * ov_x
+                        forces_y[i] += 0.14 * sy * ov_y
+                        forces_y[j] -= 0.14 * sy * ov_y
 
-        # Repel label-marker overlaps (including own marker gently)
+        # Repel label-marker overlaps
         for i in range(len(labels)):
             for j in range(len(labels)):
                 dx = tx[i] - px[j]
                 dy = ty[i] - py[j]
-                req_x = 0.5 * widths[i] + 0.024
+                req_x = 0.5 * widths[i] + 0.022
                 req_y = 0.5 * heights[i] + 0.024
                 if abs(dx) < req_x and abs(dy) < req_y:
                     sy = 1.0 if dy >= 0 else -1.0
                     sx = 1.0 if dx >= 0 else -1.0
-                    forces_y[i] += 0.25 * sy * (req_y - abs(dy))
-                    forces_x[i] += 0.15 * sx * (req_x - abs(dx))
+                    forces_y[i] += 0.28 * sy * (req_y - abs(dy))
+                    forces_x[i] += 0.16 * sx * (req_x - abs(dx))
 
             # Mild anchor tether
-            forces_x[i] -= 0.03 * (tx[i] - (px[i] + seed_offsets.get(labels[i], (0.02, 0.02))[0]))
-            forces_y[i] -= 0.03 * (ty[i] - (py[i] + seed_offsets.get(labels[i], (0.02, 0.02))[1]))
+            dx0, dy0 = seed_offsets.get(labels[i], (0.02, 0.035))
+            forces_x[i] -= 0.028 * (tx[i] - (px[i] + dx0))
+            forces_y[i] -= 0.028 * (ty[i] - (py[i] + dy0))
 
-        tx = np.clip(tx + forces_x, 0.05 + 0.5 * widths, 0.96 - 0.5 * widths)
+        tx = np.clip(tx + forces_x, 0.04 + 0.5 * widths, 0.96 - 0.5 * widths)
         ty = np.clip(ty + forces_y, 0.05, 0.95)
 
-    out_x = 10.0 ** (lx0 + tx * (lx1 - lx0))
-    out_y = ly0 + ty * (ly1 - ly0)
-    return out_x, out_y
+    out_data = to_data.transform(np.column_stack([tx, ty]))
+    return out_data[:, 0], out_data[:, 1]
 
 
 def plot_speedup_vs_nll(csv_path: Path, out_path: Path) -> None:
@@ -266,29 +275,40 @@ def plot_speedup_vs_nll(csv_path: Path, out_path: Path) -> None:
     speedup = pair_time["TorchBatchGMM"] / pair_time["EGMM"]
     dnll = pair_nll["EGMM"] - pair_nll["TorchBatchGMM"]
 
-    diag_sets = {"spambase", "miniboone", "syn_highdim128_50k", "syn_scale500k_diag"}
-    fig, ax = plt.subplots(figsize=(8.6, 5.6))
+    diag_sets = set(df[df["cov_type"] == "diag"]["dataset"].unique())
+    n_total = len(pair_nll)
+    n_diag = sum(1 for n in pair_nll.index if n in diag_sets)
+    n_full = n_total - n_diag
+    n_qual_win = int((dnll <= 1e-3).sum())
+    n_speed_win = int((speedup > 1.0).sum())
 
-    xlim = (0.88, 9.5)
-    ylim = (-6.85, 0.95)
+    fig, ax = plt.subplots(figsize=(10.2, 6.2))
+
+    xlim = (0.56, 10.8)
+    ylim = (-19.0, 1.15)
+    ax.set_xscale("log")
+    ax.set_yscale("symlog", linthresh=1.5, linscale=1.35)
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
-    ax.set_xscale("log")
+    yticks = [0.5, 0.0, -0.5, -1.0, -1.5, -3.0, -6.0, -10.0, -15.0]
+    ax.set_yticks(yticks)
+    ax.set_yticklabels([f"{y:g}" for y in yticks])
 
     # Subtle shading for strictly dominating quadrant (faster & lower NLL)
-    ax.axvspan(1.0, xlim[1], ymin=0.0, ymax=(0.0 - ylim[0]) / (ylim[1] - ylim[0]), color="#2ca02c", alpha=0.045)
+    y0_axes = (ax.transData + ax.transAxes.inverted()).transform([[1.0, 0.0]])[0, 1]
+    ax.axvspan(1.0, xlim[1], ymin=0.0, ymax=float(y0_axes), color="#2ca02c", alpha=0.045)
     ax.axvline(1.0, color="#666666", linestyle="--", linewidth=1.1)
     ax.axhline(0.0, color="#666666", linestyle="--", linewidth=1.1)
 
     for is_diag, marker, color, lbl in [
-        (False, "o", "#d62728", "Full covariance (19 datasets)"),
-        (True, "s", "#1f77b4", "Diagonal covariance (4 datasets)"),
+        (False, "o", "#d62728", f"Full covariance ({n_full} datasets)"),
+        (True, "s", "#1f77b4", f"Diagonal covariance ({n_diag} datasets)"),
     ]:
         idxs = [n for n in pair_nll.index if (n in diag_sets) == is_diag]
         ax.scatter(
             speedup.loc[idxs],
             dnll.loc[idxs],
-            s=72,
+            s=68,
             marker=marker,
             color=color,
             alpha=0.90,
@@ -300,36 +320,45 @@ def plot_speedup_vs_nll(csv_path: Path, out_path: Path) -> None:
 
     names = list(pair_nll.index)
     seed_offsets = {
-        "syn_scale200k": (-0.01, -0.05),
-        "syn_highdim128_50k": (0.04, 0.05),
-        "syn_highk64_60k": (0.03, -0.04),
-        "syn_imbalanced_40k": (0.05, 0.02),
-        "segment": (0.04, 0.02),
-        "digits_pca32": (0.04, -0.03),
-        "syn_anisotropic_30k": (0.04, -0.03),
-        "letter": (0.04, -0.02),
-        "spambase": (0.04, 0.02),
-        "california_housing": (-0.08, 0.06),
-        "waveform5000": (0.04, -0.02),
-        "optdigits": (-0.02, 0.04),
-        "satimage": (-0.06, -0.04),
-        "pendigits": (0.04, -0.03),
-        "syn_overlapping_30k": (0.04, -0.05),
-        "magic04": (-0.06, 0.04),
-        "shuttle": (0.04, -0.01),
-        "electricity": (0.03, 0.03),
-        "mnist784_pca48": (0.03, 0.02),
-        "fashion_mnist_pca48": (0.03, -0.03),
-        "syn_scale500k_diag": (-0.04, -0.06),
-        "covtype_581k": (-0.08, 0.02),
-        "miniboone": (-0.09, -0.05),
+        "syn_scale400k_d256_diag": (0.07, -0.02),
+        "syn_highdim128_50k": (-0.02, -0.05),
+        "segment": (0.04, -0.04),
+        "syn_highk64_60k": (-0.04, -0.06),
+        "syn_imbalanced_40k": (0.01, 0.05),
+        "syn_overlapping_30k": (0.02, -0.05),
+        "syn_anisotropic_30k": (-0.04, -0.04),
+        "philippine": (-0.02, -0.05),
+        "gas_drift": (-0.03, 0.05),
+        "digits_pca32": (0.03, 0.04),
+        "optdigits": (0.02, 0.05),
+        "syn_scale200k": (-0.04, -0.04),
+        "letter": (-0.03, 0.04),
+        "mnist784_pca48": (-0.03, -0.05),
+        "california_housing": (-0.03, 0.06),
+        "satimage": (-0.04, 0.04),
+        "shuttle": (0.03, -0.03),
+        "fashion_mnist_pca48": (-0.02, -0.05),
+        "spambase": (0.05, 0.02),
+        "pendigits": (-0.04, -0.04),
+        "har": (-0.04, -0.04),
+        "magic04": (-0.02, 0.05),
+        "waveform5000": (-0.04, 0.04),
+        "electricity": (-0.02, 0.05),
+        "syn_scale500k_diag": (0.04, 0.03),
+        "miniboone": (-0.03, -0.05),
+        "syn_scale300k_k64_full": (0.05, -0.04),
+        "higgs_98k": (0.04, -0.04),
+        "jannis": (0.05, -0.02),
+        "numerai28.6": (0.03, 0.05),
+        "covtype_581k": (-0.06, -0.02),
+        "creditcard": (0.02, -0.05),
+        "skin_nonskin": (-0.02, 0.05),
     }
     lx, ly = _repel_labels(
+        ax,
         speedup.loc[names].to_numpy(),
         dnll.loc[names].to_numpy(),
         names,
-        xlim,
-        ylim,
         seed_offsets,
     )
     for i, name in enumerate(names):
@@ -337,7 +366,7 @@ def plot_speedup_vs_nll(csv_path: Path, out_path: Path) -> None:
             name,
             xy=(speedup.loc[name], dnll.loc[name]),
             xytext=(lx[i], ly[i]),
-            fontsize=8.2,
+            fontsize=7.8,
             ha="center",
             va="center",
             color="#222222",
@@ -346,19 +375,19 @@ def plot_speedup_vs_nll(csv_path: Path, out_path: Path) -> None:
         )
 
     ax.text(
-        7.8,
-        -4.9,
-        "Strictly Dominates\n(Faster & Better NLL)\n19/23 Quality | 23/23 Speed",
+        xlim[1] * 0.92,
+        -13.0,
+        f"Strictly Dominates\n(Faster & Better/Tied NLL)\n{n_qual_win}/{n_total} Quality | {n_speed_win}/{n_total} Speed",
         ha="right",
         va="center",
-        fontsize=9.2,
+        fontsize=9.0,
         color="#1d6b1d",
-        bbox={"boxstyle": "round,pad=0.35", "facecolor": "#eef8ee", "edgecolor": "#7ab87a", "alpha": 0.9},
+        bbox={"boxstyle": "round,pad=0.35", "facecolor": "#eef8ee", "edgecolor": "#7ab87a", "alpha": 0.92},
     )
     ax.set_xlabel(r"Wall-Clock Speedup vs TorchBatchGMM (log scale, $>1\times$ = e-GMM faster)")
-    ax.set_ylabel(r"Held-Out Test $\Delta$NLL = e-GMM $-$ Batch ($<0$ = e-GMM better)")
-    ax.set_title("e-GMM vs GPU TorchBatchGMM Across 23 Benchmark Datasets (3-Seed Mean)")
-    ax.legend(frameon=True, facecolor="white", framealpha=0.94, loc="lower left")
+    ax.set_ylabel(r"Held-Out Test $\Delta$NLL = e-GMM $-$ Batch ($<0$ = e-GMM better, symlog)")
+    ax.set_title(f"e-GMM vs GPU TorchBatchGMM Across {n_total} Benchmark Datasets (3-Seed Mean)")
+    ax.legend(frameon=True, facecolor="white", framealpha=0.94, loc="upper left")
     ax.grid(True, which="both", alpha=0.25)
     fig.tight_layout()
     fig.savefig(out_path, dpi=300, bbox_inches="tight")

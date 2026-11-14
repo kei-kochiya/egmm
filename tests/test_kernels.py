@@ -136,3 +136,43 @@ def test_moments_to_params_and_precisions_float32_high_dim_ill_conditioned():
     assert torch.isfinite(pf).all()
     assert torch.isfinite(ldh).all()
 
+
+@pytest.mark.parametrize("cov_type", ["diag", "full"])
+def test_compute_log_gaussian_prob_and_estep_chunking_exact(cov_type):
+    from egmm.kernels import compute_log_gaussian_prob_from_precisions, prepare_precisions
+
+    rng = np.random.default_rng(99)
+    B, K, D = 250, 6, 8
+    X = torch.from_numpy(rng.normal(loc=50.0, scale=2.0, size=(B, D)).astype(np.float32))
+    weights = torch.full((K,), 1.0 / K, dtype=torch.float32)
+    means = torch.from_numpy(rng.normal(loc=50.0, scale=2.0, size=(K, D)).astype(np.float32))
+    if cov_type == "diag":
+        covs = torch.from_numpy(rng.uniform(0.4, 2.5, size=(K, D)).astype(np.float32))
+    else:
+        A = rng.normal(size=(K, D, D)).astype(np.float32)
+        covs = torch.from_numpy(np.einsum("kij,klj->kil", A, A) + 0.5 * np.eye(D, dtype=np.float32)[None, :, :])
+
+    pf, ldh = prepare_precisions(covs, covariance_type=cov_type)
+    lp_full = compute_log_gaussian_prob_from_precisions(
+        X, means, pf, ldh, covariance_type=cov_type, max_work_elements=32_000_000
+    )
+    lp_chunk = compute_log_gaussian_prob_from_precisions(
+        X, means, pf, ldh, covariance_type=cov_type, max_work_elements=300
+    )
+    torch.testing.assert_close(lp_chunk, lp_full, rtol=1e-5, atol=1e-5)
+
+    r1, ll1, m1, s1, q1 = e_step_batch(
+        X, weights, means, prec_factor=pf, log_det_half=ldh,
+        covariance_type=cov_type, stats_dtype=torch.float64, max_work_elements=32_000_000
+    )
+    r2, ll2, m2, s2, q2 = e_step_batch(
+        X, weights, means, prec_factor=pf, log_det_half=ldh,
+        covariance_type=cov_type, stats_dtype=torch.float64, max_work_elements=300
+    )
+    torch.testing.assert_close(r2, r1, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(ll2, ll1, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(m2, m1, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(s2, s1, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(q2, q1, rtol=1e-6, atol=1e-6)
+
+

@@ -43,6 +43,8 @@ class EGMM(DensityMixin, BaseEstimator):
         revive_dead: bool = True,
         revive_every: int | str = "auto",
         dead_ratio: float = 0.05,
+        polish_steps: int | str = "auto",
+        init_usage_scale: float | str = "auto",
         n_init: int = 1,
         init_params: str = "kmeans++",
         device: str = "auto",
@@ -60,6 +62,8 @@ class EGMM(DensityMixin, BaseEstimator):
         self.revive_dead = revive_dead
         self.revive_every = revive_every
         self.dead_ratio = dead_ratio
+        self.polish_steps = polish_steps
+        self.init_usage_scale = init_usage_scale
         self.n_init = n_init
         self.init_params = init_params
         self.device = device
@@ -420,9 +424,14 @@ class EGMM(DensityMixin, BaseEstimator):
                 epoch_batches.append(perm[:used_len].view(steps_per_epoch, batch_size))
             else:
                 pad = used_len - n_samples
-                epoch_batches.append(
-                    torch.cat([perm, perm[:pad]], dim=0).view(steps_per_epoch, batch_size)
-                )
+                extra_parts = [perm]
+                rem = pad
+                while rem > 0:
+                    p2 = torch.randperm(n_samples, generator=generator, device=device)
+                    take = min(rem, n_samples)
+                    extra_parts.append(p2[:take])
+                    rem -= take
+                epoch_batches.append(torch.cat(extra_parts, dim=0).view(steps_per_epoch, batch_size))
         return torch.cat(epoch_batches, dim=0)
 
     def _build_schedule_and_revivals(
@@ -448,8 +457,9 @@ class EGMM(DensityMixin, BaseEstimator):
         if not self.revive_dead:
             rev_set: set[int] = set()
         elif hp.revive_points > 0:
+            end_frac = 0.45 if self.covariance_type == "diag" else 0.70
             rev_set = (
-                {int(round(f * (total_steps - 1))) for f in np.linspace(0.15, 0.70, hp.revive_points)}
+                {int(round(f * (total_steps - 1))) for f in np.linspace(0.15, end_frac, hp.revive_points)}
                 if total_steps >= 6
                 else set()
             )
@@ -486,7 +496,14 @@ class EGMM(DensityMixin, BaseEstimator):
         return (float(ll_sum.item()) / max(1, X_eval.shape[0])) + float(self._log_jac_t.item())
 
     def fit(self, X: np.ndarray | torch.Tensor, y: Any = None) -> EGMM:
+        import time as _time
+
+        prof = bool(getattr(self, "_profile_phases", False))
+        t_start = _time.perf_counter() if prof else 0.0
         X_std, device, dtype, N, D = self._prepare_fit_data(X)
+        if prof and device.type == "cuda":
+            torch.cuda.synchronize(device)
+        t_std = (_time.perf_counter() - t_start) if prof else 0.0
 
         hp = auto_hyperparameters(
             n_samples=N,
@@ -497,21 +514,29 @@ class EGMM(DensityMixin, BaseEstimator):
             max_epochs=self.max_epochs,
             alpha=self.alpha,
             revive_every=self.revive_every,
+            init_usage_scale=self.init_usage_scale,
+            polish_steps=self.polish_steps,
         )
+        self.hyperparams_ = hp
         steps_ep = hp.steps_per_epoch
         total_steps = hp.max_epochs * steps_ep
         fast_chol = dtype == torch.float32
         alphas_t, rev_set = self._build_schedule_and_revivals(total_steps, hp, device)
-        use_polish = type(self) is EGMM and hp.polish_steps > 0
-        use_init_scale = type(self) is EGMM and hp.init_usage_scale != 1.0
+        use_polish = hp.polish_steps > 0
+        use_init_scale = hp.init_usage_scale != 1.0
 
         best_lower_bound = -math.inf
         best_state: tuple[torch.Tensor, ...] | None = None
         best_revivals = 0
         best_iters = 0
         best_converged = False
+        t_seed_acc = 0.0
+        t_cap_acc = 0.0
+        t_ema_acc = 0.0
+        t_pol_acc = 0.0
 
         for init_idx in range(max(1, self.n_init)):
+            t0_s = _time.perf_counter() if prof else 0.0
             gen = self._make_generator(device, seed_offset=init_idx * 9973)
             M, S, Q = self._initialize_moments(X_std, generator=gen, out_dtype=torch.float64)
             if use_init_scale:
@@ -525,12 +550,17 @@ class EGMM(DensityMixin, BaseEstimator):
             batches = self._build_epoch_batches(
                 N, hp.batch_size, steps_ep, hp.max_epochs, generator=gen, device=device
             )
+            if prof and device.type == "cuda":
+                torch.cuda.synchronize(device)
+            if prof:
+                t_seed_acc += _time.perf_counter() - t0_s
 
             revivals_count = 0
             converged = False
             polish_done = 0
 
             if device.type == "cuda" and total_steps >= 4:
+                t0_c = _time.perf_counter() if prof else 0.0
                 pos_buf = torch.zeros((), device=device, dtype=torch.long)
                 M_buf = M.clone()
                 S_buf = S.clone()
@@ -591,7 +621,11 @@ class EGMM(DensityMixin, BaseEstimator):
                 graph = torch.cuda.CUDAGraph()
                 with torch.cuda.graph(graph, stream=stream):
                     step_body()
+                if prof:
+                    torch.cuda.synchronize(device)
+                    t_cap_acc += _time.perf_counter() - t0_c
 
+                t0_e = _time.perf_counter() if prof else 0.0
                 for gstep in range(total_steps):
                     graph.replay()
                     if gstep in rev_set:
@@ -622,9 +656,13 @@ class EGMM(DensityMixin, BaseEstimator):
                             ldh_buf.copy_(ldh2)
 
                 del graph
+                if prof:
+                    torch.cuda.synchronize(device)
+                    t_ema_acc += _time.perf_counter() - t0_e
                 M, S, Q = M_buf, S_buf, Q_buf
                 weights, means, prec_factor, log_det_half = w_buf, mu_buf, pf_buf, ldh_buf
             else:
+                t0_e = _time.perf_counter() if prof else 0.0
                 for gstep in range(total_steps):
                     xb = X_std.index_select(0, batches[gstep])
                     _, _, dM, dS, dQ = e_step_batch(
@@ -659,20 +697,50 @@ class EGMM(DensityMixin, BaseEstimator):
                         allow_sync=False,
                         fast_cholesky_f32=fast_chol,
                     )
+                if prof:
+                    if device.type == "cuda":
+                        torch.cuda.synchronize(device)
+                    t_ema_acc += _time.perf_counter() - t0_e
 
             last_ll: float | None = None
             if use_polish:
+                t0_p = _time.perf_counter() if prof else 0.0
                 prev_ll: float | None = None
+                polish_chunk = 32768
                 for pit in range(hp.polish_steps):
-                    _, ll, dM, dS, dQ = e_step_batch(
-                        X_std,
-                        weights,
-                        means,
-                        covariance_type=self.covariance_type,
-                        prec_factor=prec_factor,
-                        log_det_half=log_det_half,
-                        stats_dtype=torch.float64,
-                    )
+                    if N <= polish_chunk:
+                        _, ll, dM, dS, dQ = e_step_batch(
+                            X_std,
+                            weights,
+                            means,
+                            covariance_type=self.covariance_type,
+                            prec_factor=prec_factor,
+                            log_det_half=log_det_half,
+                            stats_dtype=torch.float64,
+                        )
+                    else:
+                        dM = torch.zeros_like(M)
+                        dS = torch.zeros_like(S)
+                        dQ = torch.zeros_like(Q)
+                        ll_sum = torch.zeros((), device=device, dtype=torch.float64)
+                        for st in range(0, N, polish_chunk):
+                            en = min(N, st + polish_chunk)
+                            bsz = en - st
+                            _, b_ll, m_b, s_b, q_b = e_step_batch(
+                                X_std[st:en],
+                                weights,
+                                means,
+                                covariance_type=self.covariance_type,
+                                prec_factor=prec_factor,
+                                log_det_half=log_det_half,
+                                stats_dtype=torch.float64,
+                            )
+                            frac = bsz / N
+                            dM = dM + m_b * frac
+                            dS = dS + s_b * frac
+                            dQ = dQ + q_b * frac
+                            ll_sum = ll_sum + b_ll.to(torch.float64) * bsz
+                        ll = ll_sum / N
                     M, S, Q = dM, dS, dQ
                     weights, means, _, prec_factor, log_det_half = self._moments_to_estep_params(
                         M,
@@ -692,6 +760,10 @@ class EGMM(DensityMixin, BaseEstimator):
                         prev_ll = llv
                 if last_ll is None:
                     last_ll = float(ll.item())
+                if prof:
+                    if device.type == "cuda":
+                        torch.cuda.synchronize(device)
+                    t_pol_acc += _time.perf_counter() - t0_p
 
             weights, means, covs, prec_factor, log_det_half = self._moments_to_estep_params(
                 M, S, Q, estep_dtype=dtype, allow_sync=True, fast_cholesky_f32=False
@@ -711,6 +783,7 @@ class EGMM(DensityMixin, BaseEstimator):
                 best_converged = converged
 
         assert best_state is not None
+        t0_ex = _time.perf_counter() if prof else 0.0
         M, S, Q, weights, means, covs, prec_factor, log_det_half = best_state
         self._M_t, self._S_t, self._Q_t = M, S, Q
         self._partial_step = total_steps
@@ -721,6 +794,18 @@ class EGMM(DensityMixin, BaseEstimator):
         self.lower_bound_ = float(best_lower_bound)
         self.revivals_count_ = best_revivals
         self._sync_public_attributes(weights, means, covs, prec_factor, log_det_half)
+        if prof:
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            t_exp = _time.perf_counter() - t0_ex
+            self.timing_breakdown_ = {
+                "standardize_ms": t_std * 1e3,
+                "seeding_ms": t_seed_acc * 1e3,
+                "graph_capture_ms": t_cap_acc * 1e3,
+                "ema_replay_ms": t_ema_acc * 1e3,
+                "polish_ms": t_pol_acc * 1e3,
+                "export_ms": t_exp * 1e3,
+            }
         return self
 
     def partial_fit(self, X: np.ndarray | torch.Tensor, y: Any = None) -> EGMM:
@@ -745,7 +830,13 @@ class EGMM(DensityMixin, BaseEstimator):
                 max_epochs=self.max_epochs,
                 alpha=self.alpha,
                 revive_every=self.revive_every,
+                init_usage_scale=self.init_usage_scale,
+                polish_steps=self.polish_steps,
             )
+            if self._hp.init_usage_scale != 1.0:
+                self._M_t = self._M_t * self._hp.init_usage_scale
+                self._S_t = self._S_t * self._hp.init_usage_scale
+                self._Q_t = self._Q_t * self._hp.init_usage_scale
             self._partial_step = 0
             self._partial_total_steps = max(20, self._hp.max_epochs * 10)
             self.revivals_count_ = 0
@@ -763,6 +854,7 @@ class EGMM(DensityMixin, BaseEstimator):
 
         bs = N_chunk if self.batch_size == "auto" else min(N_chunk, int(self.batch_size))
         last_lb = 0.0
+        rev_cutoff = int(0.8 * self._partial_total_steps)
         for start in range(0, N_chunk, bs):
             Xb = X_std[start : min(N_chunk, start + bs)]
             _, batch_lb, m_bar, s_bar, q_bar = e_step_batch(
@@ -785,7 +877,11 @@ class EGMM(DensityMixin, BaseEstimator):
             self._M_t = one_minus * self._M_t + alpha_t * m_bar.to(torch.float64)
             self._S_t = one_minus * self._S_t + alpha_t * s_bar.to(torch.float64)
             self._Q_t = one_minus * self._Q_t + alpha_t * q_bar.to(torch.float64)
-            if self.revive_dead and (self._partial_step + 1) % self._hp.revive_every == 0:
+            if (
+                self.revive_dead
+                and self._partial_step < rev_cutoff
+                and (self._partial_step + 1) % self._hp.revive_every == 0
+            ):
                 self._M_t, self._S_t, self._Q_t, n_rev = revive_dead_components(
                     self._M_t,
                     self._S_t,
@@ -821,21 +917,102 @@ class EGMM(DensityMixin, BaseEstimator):
         log_weights = torch.log(self._weights_t.clamp_min(1e-30))
         return log_prob + log_weights.unsqueeze(0) + self._log_jac_t
 
+    def _score_samples_chunked(
+        self, X: np.ndarray | torch.Tensor, max_work_elements: int = 16_000_000
+    ) -> np.ndarray:
+        check_is_fitted(self, ["weights_", "means_", "covariances_"])
+        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
+        N, D = X_std.shape
+        K = self.n_components
+        chunk_b = max(1, min(N, max_work_elements // max(1, K + D)))
+        if chunk_b >= N:
+            wlp = self._estimate_weighted_log_prob(X)
+            return torch.logsumexp(wlp, dim=1).detach().cpu().numpy().astype(np.float64)
+
+        log_weights = torch.log(self._weights_t.clamp_min(1e-30)).unsqueeze(0)
+        out = np.empty(N, dtype=np.float64)
+        for st in range(0, N, chunk_b):
+            en = min(N, st + chunk_b)
+            lp = compute_log_gaussian_prob_from_precisions(
+                X_std[st:en],
+                self._means_std_t,
+                self._prec_factor_std_t,
+                self._log_det_half_std_t,
+                covariance_type=self.covariance_type,
+                max_work_elements=max_work_elements,
+            )
+            wlp = lp + log_weights + self._log_jac_t
+            out[st:en] = torch.logsumexp(wlp, dim=1).detach().cpu().numpy().astype(np.float64)
+        return out
+
+    def _predict_proba_chunked(
+        self, X: np.ndarray | torch.Tensor, max_work_elements: int = 16_000_000
+    ) -> np.ndarray:
+        check_is_fitted(self, ["weights_", "means_", "covariances_"])
+        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
+        N, D = X_std.shape
+        K = self.n_components
+        chunk_b = max(1, min(N, max_work_elements // max(1, K + D)))
+        if chunk_b >= N:
+            wlp = self._estimate_weighted_log_prob(X)
+            log_norm = torch.logsumexp(wlp, dim=1, keepdim=True)
+            return torch.exp(wlp - log_norm).detach().cpu().numpy().astype(np.float64)
+
+        log_weights = torch.log(self._weights_t.clamp_min(1e-30)).unsqueeze(0)
+        out = np.empty((N, K), dtype=np.float64)
+        for st in range(0, N, chunk_b):
+            en = min(N, st + chunk_b)
+            lp = compute_log_gaussian_prob_from_precisions(
+                X_std[st:en],
+                self._means_std_t,
+                self._prec_factor_std_t,
+                self._log_det_half_std_t,
+                covariance_type=self.covariance_type,
+                max_work_elements=max_work_elements,
+            )
+            wlp = lp + log_weights + self._log_jac_t
+            log_norm = torch.logsumexp(wlp, dim=1, keepdim=True)
+            out[st:en] = torch.exp(wlp - log_norm).detach().cpu().numpy().astype(np.float64)
+        return out
+
     def score_samples(self, X: np.ndarray | torch.Tensor) -> np.ndarray:
-        wlp = self._estimate_weighted_log_prob(X)
-        return torch.logsumexp(wlp, dim=1).detach().cpu().numpy().astype(np.float64)
+        return self._score_samples_chunked(X)
 
     def score(self, X: np.ndarray | torch.Tensor, y: Any = None) -> float:
         return float(self.score_samples(X).mean())
 
     def predict_proba(self, X: np.ndarray | torch.Tensor) -> np.ndarray:
-        wlp = self._estimate_weighted_log_prob(X)
-        log_norm = torch.logsumexp(wlp, dim=1, keepdim=True)
-        return torch.exp(wlp - log_norm).detach().cpu().numpy().astype(np.float64)
+        return self._predict_proba_chunked(X)
 
     def predict(self, X: np.ndarray | torch.Tensor) -> np.ndarray:
-        wlp = self._estimate_weighted_log_prob(X)
-        return torch.argmax(wlp, dim=1).detach().cpu().numpy()
+        check_is_fitted(self, ["weights_", "means_", "covariances_"])
+        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
+        N, D = X_std.shape
+        K = self.n_components
+        chunk_b = max(1, min(N, 16_000_000 // max(1, K + D)))
+        log_weights = torch.log(self._weights_t.clamp_min(1e-30)).unsqueeze(0)
+        if chunk_b >= N:
+            lp = compute_log_gaussian_prob_from_precisions(
+                X_std,
+                self._means_std_t,
+                self._prec_factor_std_t,
+                self._log_det_half_std_t,
+                covariance_type=self.covariance_type,
+            )
+            return torch.argmax(lp + log_weights, dim=1).detach().cpu().numpy()
+
+        out = np.empty(N, dtype=np.int64)
+        for st in range(0, N, chunk_b):
+            en = min(N, st + chunk_b)
+            lp = compute_log_gaussian_prob_from_precisions(
+                X_std[st:en],
+                self._means_std_t,
+                self._prec_factor_std_t,
+                self._log_det_half_std_t,
+                covariance_type=self.covariance_type,
+            )
+            out[st:en] = torch.argmax(lp + log_weights, dim=1).detach().cpu().numpy()
+        return out
 
     def fit_predict(self, X: np.ndarray | torch.Tensor, y: Any = None) -> np.ndarray:
         self.fit(X, y)

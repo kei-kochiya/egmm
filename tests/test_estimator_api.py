@@ -144,3 +144,28 @@ def test_egmm_mixed_precision_moments_prevent_cancellation():
     # True variance of tight cluster is (1e-2)^2 = 1e-4; float64 moments should preserve scale accurately.
     assert 3e-5 < recovered_var < 3e-4
 
+
+@pytest.mark.parametrize("cov_type", ["diag", "full"])
+def test_egmm_explicit_ablation_params_and_chunked_scoring(cov_type):
+    X, _ = make_blobs(n_samples=1200, n_features=6, centers=4, random_state=21)
+    est = EGMM(
+        n_components=4,
+        covariance_type=cov_type,
+        polish_steps=0,
+        init_usage_scale=1.0,
+        device="cpu",
+        random_state=21,
+    ).fit(X)
+    assert est.polish_steps == 0
+    assert est.init_usage_scale == 1.0
+    assert est.n_iter_ == est._hp.max_epochs
+
+    # Verify chunked scoring produces identical results to unchunked scoring
+    s_full = est.score_samples(X)
+    p_full = est.predict_proba(X)
+    s_chunk = est._score_samples_chunked(X, max_work_elements=200)
+    p_chunk = est._predict_proba_chunked(X, max_work_elements=200)
+    np.testing.assert_allclose(s_chunk, s_full, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(p_chunk, p_full, rtol=1e-5, atol=1e-5)
+
+

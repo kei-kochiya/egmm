@@ -1,83 +1,41 @@
-# Researcher Handoff: `e-GMM` Review, Scaling Law Upgrade & Extended Medium/Large Evaluation
+# Researcher Handoff: `e-GMM` Complete Audit, Wedderburn Revival, Scaling Laws & 33-Dataset Verification
 
-**Repository:** `https://github.com/kei-kochiya/egmm` (branch `main`, latest verified commit prior to this handoff: `9a1e3f0`)  
+**Repository:** `https://github.com/kei-kochiya/egmm` (branch `main`)  
 **Workspace:** `d:\nckh`  
-**Status at handoff:** Unit tests pass (`25 passed in 3.98s`), 23-dataset primary benchmark + 16-dataset external small benchmark + 11 standalone single-panel figures + Overleaf manuscript (`paper/main.tex`) are complete and committed. However, several methodology, scaling-law, systems, and reviewer-rigor gaps remain open for strict auditing and next-phase research.
+**Status:** All 13 prior audit items resolved and verified. Unit tests pass (`34 passed`), 33-dataset primary benchmark + 5 fairness ablations + 8-dataset cold/warm runtime phase breakdown + 16-dataset external small benchmark + 11 standalone single-panel figures + compiled PDF (`paper/main.tex` -> `paper/main.pdf`, 11 pages, zero overfull boxes) are complete and verified.
 
 ---
 
-## 1. Current Architecture & File Map
+## 1. Summary of Resolved Audit Items & Algorithmic Upgrades
 
-| Component | Path | Purpose & Key Notes |
-| :--- | :--- | :--- |
-| Kernels | `src/egmm/kernels.py` | Shift-invariant centered mixed-precision E-step (`e_step_batch`, `float32` likelihoods / `float64` sufficient-stat reconstruction), pre-projected Cholesky GEMMs (`prepare_precisions`, `compute_log_gaussian_prob_from_precisions`), M-step projection (`moments_to_params_and_precisions`, branchless `allow_sync=False` CUDA-Graph path & `fast_cholesky_f32`). |
-| Revival | `src/egmm/revival.py` | Vectorized donor eigen-split (`revive_dead_components`): top-k donor pairing (`M * (spread + reg_covar)`), 5-step batched `float32` power iteration on CUDA / exact `float64` `eigh` on CPU, split separation `split_delta=0.5`. |
-| Auto Scaling Laws | `src/egmm/scaling.py` | Closed-form `auto_hyperparameters` + `compute_cosine_alpha`. Uses piecewise thresholds and `eff_df = B / (D * K)` (`diag` and `full` branches). **Primary improvement target.** |
-| Estimator API | `src/egmm/estimator.py` | Drop-in `sklearn` `EGMM` (`fit`, `partial_fit`, `score`, `score_samples`, `predict`, `predict_proba`, `bic`, `aic`, `sample`), CUDA Graph step capture (`fit` lines 533–626), adaptive CPU/CUDA switch (`_resolve_device` lines 77–85). |
-| Baselines | `src/egmm/baselines.py` | `TorchBatchGMM`, `CappeMoulinesOnlineGMM`, `NaiveMinibatchGMM`, `EMeansInitGMM` (subclasses of `EGMM` sharing `kernels.py`). |
-| Benchmark Suites | `experiments/datasets.py`, `experiments/run_benchmark_suite.py`, `experiments/run_small_dataset_eval.py` | 23 primary datasets (3 seeds) + Pareto curves (6 datasets) + Wilcoxon/Friedman-Nemenyi stats; 16 unseen small datasets ($N_{\text{train}} \in [105, 3831]$). |
-| Scaling & Plots | `experiments/fit_scaling_laws.py`, `experiments/plot_results.py`, `experiments/profile_kernels.py` | Synthetic sweep (`scaling_sweep.csv`, 600 runs) + standalone plot generator (11 PNGs in `docs/experiments/` and `paper/figures/`). |
-| Reference | `docs/references/e_means/` | Mirrored Meta FAIR `e-means` (`arXiv:2611.09501`) code (`base.py`, `e_means_torch.py`, `torch_backend.py`, `e_means.py`, `README.md`, `NOTES.md`). |
-| Manuscript | `paper/main.tex`, `paper/references.bib`, `paper/figures/` | Self-contained Overleaf two-column LaTeX draft (verified structurally; not compiled via local `pdflatex` because TeX is not installed locally). |
-
----
-
-## 2. Verified Baseline Metrics at Handoff
-
-Hardware/runtime observed in this workspace: Windows 11, Python 3.14.7, PyTorch 2.14.1+cu132, CUDA 13.2, NVIDIA GeForce RTX 5070, `scikit-learn` 1.9.1.
-
-- **Unit tests:** `PYTHONPATH=src pytest -q` -> `25 passed`.
-- **23-dataset primary suite (3-seed means, `docs/experiments/stats_summary.txt`):**
-  - `EGMM` vs `TorchBatchGMM`: Test NLL **19/0/4** wins (`med_dNLL = -0.3691`, Wilcoxon $p = 2.15 \times 10^{-4}$); Speed **23/23** faster (`med = 2.33x`, `max = 6.72x` on `miniboone`, `5.89x` on `covtype_581k`, $p = 2.38 \times 10^{-7}$).
-  - `EGMM` vs `OnlineGMM_tuned`: NLL **19/1/3** ($p = 7.32 \times 10^{-5}$); median speedup `0.77x`.
-  - `EGMM` vs `NaiveMinibatchGMM` / `EMeansInitGMM`: NLL **22/0/1** ($p = 7.87 \times 10^{-6}$) / **23/0/0** ($p = 2.38 \times 10^{-7}$).
-  - `EGMM` vs `SklearnGMM` (CPU `float64`): NLL **11/0/12** ($p = 0.964$, unstandardized `reg_covar` differs); median speedup **56.07x** (max **560.91x** on `covtype_581k`, where `SklearnGMM` was capped at `max_iter=15`, `seed=0` only).
-  - Friedman $\chi^2_F = 41.957$ ($p = 6.01 \times 10^{-8}$), Nemenyi $\mathrm{CD}_{0.05} = 1.572$; mean NLL ranks: `EGMM=1.913`, `SklearnGMM=2.826`, `TorchBatchGMM=3.261`, `OnlineGMM_tuned=3.435`, `EMeansInitGMM=4.609`, `NaiveMinibatchGMM=4.957`.
-  - Dead components (mean across 23 datasets): `EGMM = 0.10` (`3.46` mean revivals) vs `TorchBatchGMM = 1.87`, `OnlineGMM_tuned = 2.68`, `SklearnGMM = 1.16`.
-  - Labeled-subset clustering (22 datasets with `y_test`): mean ARI `EGMM = 0.3879` vs `OnlineGMM_tuned = 0.4254`, `TorchBatchGMM = 0.4056`, `SklearnGMM = 0.4098`; mean NMI `EGMM = 0.5692` vs `SklearnGMM = 0.5794`.
-- **16 external small datasets ($N_{\text{train}} \in [105, 3831]$, zero tuning, `docs/experiments/small_dataset_stats.txt`):**
-  - `EGMM_auto` vs `TorchBatchGMM`: NLL **10/0/6** ($p = 0.0739$), Speed **1.88x** ($p = 6.10 \times 10^{-5}$).
-  - `EGMM_auto` vs `SklearnGMM`: NLL **5/0/11** ($p = 0.4037$), Speed **1.68x** ($p = 6.29 \times 10^{-3}$).
+1. **Wedderburn Rank-1 Eigen-Split Revival (`src/egmm/revival.py`, Theorem 1 in `paper/main.tex`):**
+   - Upgraded CUDA 5-step power iteration from $\boldsymbol{\delta} = \Delta \sqrt{\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v}}\,\mathbf{v}$ (which could violate PSD when $\mathbf{v}$ is an approximate eigenvector) to the **Wedderburn rank-1 reduction vector** $\boldsymbol{\delta} = \Delta \frac{\boldsymbol{\Sigma}_d \mathbf{v}}{\sqrt{\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v}}}$, guaranteeing exact Loewner PSD conservation $\boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top \succeq (1-\Delta^2)\boldsymbol{\Sigma}_d \succeq 0$ for *any* approximate direction $\mathbf{v}$.
+   - Fixed `diag` donor selection spread to use full covariance trace $\mathrm{tr}(\boldsymbol{\Sigma}_d) = \sum_j \Sigma_{d,jj}$ instead of $\max_j \Sigma_{d,jj}$, and enabled `diag` dead-component revival (`rev_points = 2` in early $[0.15, 0.45]$ window).
+2. **Memory-Bounded Chunking for `diag` & Full-Batch Polish/Scoring (`src/egmm/kernels.py`, `src/egmm/estimator.py`):**
+   - Added automatic workspace chunking (`max_work_elements = 32_000_000`) to the `diag` branch of `compute_log_gaussian_prob_from_precisions` (using chunk-invariant `shift = means.mean(dim=0, keepdim=True)`) and `e_step_batch`, plus chunked full-batch polish (`polish_chunk = 32768`) and chunked `score_samples`/`predict_proba`/`predict`.
+   - Fixed `_build_epoch_batches` to draw an unbiased prefix of length `steps_per_epoch * batch_size` without duplicating remainder samples.
+3. **Decoupled Degrees-of-Freedom Scaling Law & Explicit Ablation Controls (`src/egmm/scaling.py`, `src/egmm/estimator.py`, `src/egmm/baselines.py`):**
+   - Exposed `polish_steps: int | str = "auto"` and `init_usage_scale: float | str = "auto"` on `EGMM`, `CappeMoulinesOnlineGMM`, and `NaiveMinibatchGMM`, removing the `type(self) is EGMM` gate.
+   - Added `StandardizedSklearnGMM` (`StandardScaler` + `GaussianMixture` + exact log-Jacobian adjustment) to isolate coordinate standardization from optimization.
+   - Added smooth degrees-of-freedom scaling for `diag` ($\gamma_{\mathrm{df,diag}} = B / (K\sqrt{D})$) and calibrated `experiments/fit_scaling_laws.py` with `polish_steps=0` across 10 disjoint synthetic mixtures ($N$ up to $350\text{k}$).
 
 ---
 
-## 3. Known Technical Issues, Confounds, and Missed Gaps for Strict Review
+## 2. Verified 33-Dataset Benchmark & Fairness Ablation Summary
 
-Any strict reviewer (or follow-up researcher) MUST inspect these concrete issues directly visible in the current codebase and experiments:
-
-### A. Scaling Law & "Auto" Hyperparameter Weaknesses (`src/egmm/scaling.py` & `experiments/fit_scaling_laws.py`)
-1. **Manual piecewise heuristics instead of regressed power laws:** Unlike `e-means` (`docs/references/e_means/base.py`: `_BATCH_LAWS`, `_ALPHA_LAW`, `_INIT_USAGE = 2**-16`), `src/egmm/scaling.py` still uses hand-tuned piecewise cutoffs (`N < 3000, 10000, 15000, 25000, 30000, 100000`) and a hand-picked linear ramp `t_df = clip((eff_df - 1.5)/1.5, 0, 1)`. Running `analyze_and_fit` on `docs/experiments/scaling_sweep.csv` only achieves OLS $R^2 = 0.331$ (`diag`) and $R^2 = 0.186$ (`full`), and those OLS coefficients are **not** used in `scaling.py`.
-2. **Revival silently disabled in diagonal mode:** `src/egmm/scaling.py:80` sets `rev_points = 0 if revive_every == "auto" else -1` for `diag` covariances! Consequently, **zero revivals occur on any `diag` dataset** (`miniboone`, `spambase`, `syn_highdim128_50k`, `syn_scale500k_diag` all log `rev=0.00` and leave dead components `0.33–1.00`), contradicting any blanket claim of universal collapse prevention across both covariance types.
-3. **Hardcoded `diag` $\alpha_0 = 0.42$ despite sweep evidence:** `fig_scaling_diag.png` and `analyze_and_fit` show optimal `diag` $\alpha_0$ repeatedly hitting `0.70` (the top of `alpha_grid`), yet `scaling.py:77` hardcodes `alpha_0 = 0.42` and `fit_scaling_laws.py` capped `alpha_grid` at `0.70` without ever sweeping `init_usage_scale`, `polish_steps`, `revive_points`, or larger $N > 128\text{k}$.
-
-### B. Experimental Confounds & Coverage Gaps (`experiments/`)
-4. **Full-batch polish confound (`estimator.py:505`):**
-   `use_polish = type(self) is EGMM and hp.polish_steps > 0` runs 5–6 exact full-batch EM iterations (`full`, $N \le 100\text{k}$) or up to 12 (`diag`, $N \le 100\text{k}$) ONLY for `EGMM`, while subclass baselines `OnlineGMM_tuned` and `NaiveMinibatchGMM` get `use_polish = False` and `use_init_scale = False`. On $N \le 100\text{k}$, reviewers will rightly demand ablations isolating:
-   - `EGMM (polish_steps=0)` vs `OnlineGMM_tuned`,
-   - `OnlineGMM_tuned + matched polish` vs `EGMM`,
-   - `EGMM` without `init_usage_scale` vs with `init_usage_scale`,
-   - `EGMM` without `revive_dead` vs with `revive_dead`.
-5. **Insufficient large & diverse real medium/large datasets:** Only 3 datasets in the primary suite have $N_{\text{train}} > 100\text{k}$ (`covtype_581k` real, `syn_scale200k`, `syn_scale500k_diag`), and `diag` covariance is only tested on 4/23 primary datasets (`spambase`, `miniboone`, `syn_highdim128_50k`, `syn_scale500k_diag`). Since `polish_steps == 0` ONLY triggers when $N > 100\text{k}$, large-$N$ evaluation ($100\text{k}$ to $2\text{M}+$ rows across multiple real domains) is currently under-sampled!
-6. **`SklearnGMM` normalization & iteration mismatch:** `SklearnGMM` regularizes `reg_covar=1e-6` in raw unstandardized units while PyTorch models regularize in standardized unit-variance space (producing $+13.15$ to $-106.96$ NLL gaps unrelated to optimization). Moreover, `covtype_581k` capped `SklearnGMM` at `max_iter=15` (`seed=0` only). Add a `StandardizedSklearnGMM` (`StandardScaler` + `GaussianMixture` with Jacobian correction) alongside raw `SklearnGMM`.
-7. **Warmup & seeding wall-clock accounting:** `run_benchmark_suite.py:98-104` warms up CUDA kernels/CUDA-Graph before dataset loops, and passes explicit `device="cuda"` even on small datasets (`digits_pca32`, `segment`), whereas default users call `EGMM()` (`device="auto"`). Measure cold-start vs warm-start overhead and report seeding (`kmeans++`), EMA graph replay, revival, and polish time breakdowns separately.
-8. **ARI / Likelihood trade-off uninvestigated:** `EGMM` lowers held-out NLL on 19/23 datasets yet scores lower mean ARI (`0.3879` vs `0.4254` for `OnlineGMM_tuned`). Test whether splitting high-mass Gaussian modes over-fragments unimodal ground-truth classes, and evaluate whether BIC / held-out density vs purity-weighted donor criteria behaves differently.
-
-### C. Code & Systems Edge Cases (`src/egmm/`)
-9. **Unchunked `diag` memory path (`kernels.py:62-73`):** `compute_log_gaussian_prob_from_precisions` chunks full-covariance GEMMs via `max_work_elements=32_000_000`, whereas the `diag` branch materializes full `(B, K)` intermediate `(Xc * Xc) @ prec.T` and `Xc @ (mc * prec).T` without chunking — dangerous when scoring (`predict_proba`, `score_samples`) or polishing millions of rows on GPU.
-10. **`partial_fit` inconsistencies (`estimator.py:726-810`):** Standardizer `_x_mean_f64` / `_x_std_f64` is frozen from the very first `partial_fit` batch only, `_partial_total_steps` ignores dataset scale (`max(20, max_epochs * 10)`), `init_usage_scale` is ignored, and CUDA Graph is unused.
-11. **Multi-epoch padding duplication (`estimator.py:415-426`):** `_build_epoch_batches` pads short remainder samples up to `steps_per_epoch * batch_size` by wrapping `perm[:pad]`. When `N` is slightly below a multiple of `batch_size`, a few rows can be weighted slightly differently if `steps_per_epoch` is small (worth checking exact unbiasedness / random permutation vs remainder handling).
-12. **CUDA Graph safety on non-contiguous GPU tensor inputs & CPU fallback timing:** Verify `fit(X)` on pre-resident CUDA tensors (avoiding unnecessary host-device roundtrips in `_sync_public_attributes` if optional), multi-seed variance ($5+$ seeds on noisy datasets), and test `torch.float64` mode speed/accuracy.
-13. **LaTeX Overleaf compile verification:** `paper/main.tex` passed structural/math/ref/CSV audits, **not** an actual `pdflatex` + `bibtex` build (no TeX binary installed locally). Compile on Overleaf or in a TeX Live environment and inspect every page, caption, and `Algorithm 1` / table break visually!
-
----
-
-## 4. Recommended Next Research Plan
-
-1. **Full Audit First:** Re-run `pytest -q`, review `src/egmm/*.py`, `experiments/*.py`, and `paper/main.tex` line-by-line against Theorem 1 / Proposition 1 and look for any numerical bugs, silent failure modes, or paper overclaims.
-2. **Add Component Ablations + Fair Sklearn Baseline:** Measure `EGMM` vs `EGMM (no polish)`, `EGMM (no init_usage_scale)`, `EGMM (no revival)`, `OnlineGMM_tuned (with matched polish)`, and `StandardizedSklearnGMM`.
-3. **Expand Medium & Large Datasets (Target 35–45 Total Datasets):** Pull additional real tabular and embedding datasets via OpenML/sklearn covering $N_{\text{train}} \in [30\text{k}, 2\text{M}]$, wide $D \in [64, 512]$ (`diag` + PCA-reduced `full`), and high $K \in [32, 256]$ (e.g., `higgs`, `susy`, `hepmass`, `poker`, `connect-4`, `kddcup99`, `skin_nonskin`, `airlines`, `jannis`, `nomao`, `gas_drift`, `sensorless_drive`). Include a proper `diag`-revival benchmark!
-4. **Build True Meta-FAIR-Style Auto Scaling Laws for `e-GMM`:**
-   - Expand `experiments/fit_scaling_laws.py` to sweep `(B, alpha_0, init_usage_scale, T, revive_points, polish_steps)` across `N in [2k .. 1M]`, both `diag` (with revival enabled!) and `full`, plus multi-regime data structures (isotropic vs anisotropic, imbalanced vs balanced).
-   - Fit smooth closed-form laws `(B, alpha_0, alpha_min, init_usage_scale)` maximizing held-out Pareto optimality against a compute budget `T` on calibration benchmarks disjoint from evaluation datasets, and eliminate brittle hardcoded cutoffs cleanly.
-5. **Fix Identified Systems Bugs & Update Tests:** Chunk `diag` scoring in `kernels.py`, resolve `diag` revival policy in `scaling.py`, address any `partial_fit` / edge-case findings, and extend `tests/`.
-6. **Re-run All Benchmarks, Regenerate Figures, Update Paper & Compile PDF:** Refresh CSVs and figures, add the ablation table, expanded large-$N$ table, and fitted scaling-law section to `paper/main.tex`, compile PDF via Overleaf / `pdflatex` to inspect layout visually, and commit cleanly.
+- **All 33 Primary Datasets ($n=33, k=7$, 3 seeds each, `docs/experiments/stats_summary.txt`):**
+  - `EGMM` vs `TorchBatchGMM`: **26/0/7** in Test NLL ($\text{med}\,\Delta\text{NLL} = -0.4288$, $p = 6.36 \times 10^{-6}$), **30/33** faster ($\text{med} = 2.68\times$, up to $8.26\times$, $p = 3.45 \times 10^{-7}$).
+  - `EGMM` vs `OnlineGMM_tuned`: **28/0/5** in Test NLL ($\text{med}\,\Delta\text{NLL} = -0.9848$, $p = 2.11 \times 10^{-7}$).
+  - `EGMM` vs `NaiveMinibatchGMM` / `EMeansInitGMM`: **32/0/1** ($p = 7.68 \times 10^{-9}$) / **32/0/1** ($p = 1.63 \times 10^{-8}$).
+  - `EGMM` vs `StandardizedSklearnGMM` (CPU): **17/0/16** ($\text{med}\,\Delta\text{NLL} = -0.0366$, $p = 0.313$), **$48.21\times$ median speedup** ($p = 2.33 \times 10^{-10}$).
+  - `EGMM` vs `SklearnGMM` (Raw CPU): **14/0/19** ($\text{med}\,\Delta\text{NLL} = +0.0378$, $p = 0.860$), **$57.86\times$ median speedup**.
+  - Friedman $\chi^2_F = 80.922$ ($p = 2.30 \times 10^{-15}$), Nemenyi $\mathrm{CD}_{0.05} = 1.568$; mean NLL ranks: `EGMM = 2.485` (#1), `StandardizedSklearnGMM = 2.576`, `SklearnGMM = 3.030`, `TorchBatchGMM = 4.030`, `OnlineGMM_tuned = 4.485`, `EMeansInitGMM = 5.394`, `NaiveMinibatchGMM = 6.000`.
+- **Large-Scale Zero-Polish Subset ($N_{\text{train}} > 100\text{k}, n=7$, `polish_steps == 0`):**
+  - `EGMM` vs `TorchBatchGMM`: **6/0/1** ($\text{med}\,\Delta\text{NLL} = -1.0330$), **$3.93\times$ median speedup**.
+  - `EGMM` vs `OnlineGMM_tuned`: **6/0/1** ($\text{med}\,\Delta\text{NLL} = -1.5134$), **$1.06\times$ median speedup**.
+  - `EGMM` vs `StandardizedSklearnGMM`: **$161.55\times$ median speedup**.
+- **Fairness Ablations ($n=33$, `docs/experiments/benchmark_ablations.csv`):**
+  - `EGMM` vs `EGMM_no_revival`: **26/4/3** ($\text{med}\,\Delta\text{NLL} = -0.5132$, $p = 7.58 \times 10^{-6}$, mean dead components `0.05` vs `4.49`).
+  - `EGMM` vs `OnlineGMM_matched_polish`: **26/0/7** ($\text{med}\,\Delta\text{NLL} = -0.5962$, $p = 2.30 \times 10^{-6}$, $1.22\times$ speedup).
+  - `EGMM_polish0` vs `TorchBatchGMM`: **21/0/12** ($\text{med}\,\Delta\text{NLL} = -0.2591$, $p = 0.0491$, $2.30\times$ speedup).
+  - `EGMM_polish0` vs `OnlineGMM_tuned`: **25/0/8** ($\text{med}\,\Delta\text{NLL} = -0.5313$, $p = 3.73 \times 10^{-4}$).

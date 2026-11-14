@@ -44,17 +44,24 @@ def auto_hyperparameters(
     max_epochs: int | str = "auto",
     alpha: float | str = "auto",
     revive_every: int | str = "auto",
+    init_usage_scale: float | str = "auto",
+    polish_steps: int | str = "auto",
 ) -> EGMMHyperparams:
     """Choose batch size, epoch budget, EMA peak decay, initial moment scale, and polish budget.
 
-    Uses smooth regime adaptation via effective batch degrees of freedom ``bs / (D * K)``
-    to prevent under-determined covariance blowup when ``D * K`` is large relative to ``bs``.
+    Uses smooth regime adaptation via effective batch degrees of freedom:
+    - ``full``: ``eff_df = B / (D * K)``
+    - ``diag``: ``eff_df = B / (sqrt(D) * K)``
+    All parameters (``alpha``, ``max_epochs``, ``init_usage_scale``, ``polish_steps``) are
+    decoupled so manual overrides of one hyperparameter never silently disable others.
     """
     N = max(1, int(n_samples))
     K = max(1, int(n_components))
     D = max(1, int(n_features))
     is_auto_alpha = alpha == "auto"
     is_auto_epochs = max_epochs == "auto"
+    is_auto_init = init_usage_scale == "auto"
+    is_auto_polish = polish_steps == "auto"
 
     if covariance_type == "diag":
         if batch_size == "auto":
@@ -62,6 +69,9 @@ def auto_hyperparameters(
             bs_tgt = max(b_min, min(N, 16384, max(256, N // 6)))
             steps_ep = max(1, N // bs_tgt)
             bs = max(1, N // steps_ep)
+            if bs > 16384:
+                steps_ep += 1
+                bs = max(1, N // steps_ep)
         else:
             bs = max(1, min(N, int(batch_size)))
             steps_ep = max(1, math.ceil(N / bs))
@@ -74,13 +84,29 @@ def auto_hyperparameters(
             epochs = max(1, int(max_epochs))
 
         total_steps = max(1, epochs * steps_ep)
-        alpha_0 = 0.42 if is_auto_alpha else float(alpha)
-        alpha_min = 0.10 * alpha_0
-        init_usage_scale = 1.0
-        rev_points = 0 if revive_every == "auto" else -1
+        eff_df_diag = bs / max(1.0, float(K) * math.sqrt(float(D)))
+        t_df = max(0.0, min(1.0, (eff_df_diag - 12.0) / 36.0))
+
+        resolved_init_scale = (1.0 - 0.50 * t_df) if is_auto_init else float(init_usage_scale)
+        if is_auto_alpha:
+            alpha0_base = 0.44 + 0.24 * t_df
+            alpha_0 = float(min(0.68, max(0.38, alpha0_base * (total_steps ** -0.03))))
+            alpha_min = (0.10 - 0.03 * t_df) * alpha_0
+        else:
+            alpha_0 = float(alpha)
+            alpha_min = 0.10 * alpha_0
+
+        rev_points = 2 if revive_every == "auto" else -1
         rev_every = max(2, steps_ep // 2) if revive_every == "auto" else max(1, int(revive_every))
-        base_polish = 12 if (N <= 100_000 and is_auto_alpha) else 0
-        polish_steps = base_polish if is_auto_epochs else (0 if epochs <= 1 else min(base_polish, 2 * epochs))
+        if is_auto_polish:
+            base_polish = 12 if N <= 100_000 else 0
+            resolved_polish = (
+                base_polish
+                if is_auto_epochs
+                else (0 if epochs <= 1 else min(base_polish, 2 * epochs))
+            )
+        else:
+            resolved_polish = max(0, int(polish_steps))
     else:
         if batch_size == "auto":
             b_min = min(N, max(256, 16 * K))
@@ -90,6 +116,9 @@ def auto_hyperparameters(
             bs_tgt = max(b_min, min(N, 8192, max(b_floor, N // 9)))
             steps_ep = max(1, N // bs_tgt)
             bs = max(1, N // steps_ep)
+            if bs > 8192:
+                steps_ep += 1
+                bs = max(1, N // steps_ep)
         else:
             bs = max(1, min(N, int(batch_size)))
             steps_ep = max(1, math.ceil(N / bs))
@@ -108,19 +137,26 @@ def auto_hyperparameters(
         eff_df = bs / max(1.0, float(D * K))
         t_df = max(0.0, min(1.0, (eff_df - 1.5) / 1.5))
 
-        init_usage_scale = (1.0 - 0.75 * t_df) if is_auto_alpha else 1.0
+        resolved_init_scale = (1.0 - 0.75 * t_df) if is_auto_init else float(init_usage_scale)
         if is_auto_alpha:
             alpha0_base = 0.36 + 0.56 * t_df
             alpha_0 = float(min(0.85, max(0.32, alpha0_base * (total_steps ** -0.04))))
             alpha_min = (0.10 - 0.05 * t_df) * alpha_0
         else:
             alpha_0 = float(alpha)
-            alpha_min = 0.1 * alpha_0
+            alpha_min = 0.10 * alpha_0
 
         rev_points = 4 if revive_every == "auto" else -1
         rev_every = max(2, steps_ep // 2) if revive_every == "auto" else max(1, int(revive_every))
-        base_polish = ((6 if N <= 25_000 else 5) if N <= 100_000 else 0) if is_auto_alpha else 0
-        polish_steps = base_polish if is_auto_epochs else (0 if epochs <= 1 else min(base_polish, epochs))
+        if is_auto_polish:
+            base_polish = (6 if N <= 25_000 else 5) if N <= 100_000 else 0
+            resolved_polish = (
+                base_polish
+                if is_auto_epochs
+                else (0 if epochs <= 1 else min(base_polish, epochs))
+            )
+        else:
+            resolved_polish = max(0, int(polish_steps))
 
     return EGMMHyperparams(
         batch_size=bs,
@@ -128,8 +164,8 @@ def auto_hyperparameters(
         alpha_0=alpha_0,
         alpha_min=alpha_min,
         revive_every=rev_every,
-        init_usage_scale=init_usage_scale,
-        polish_steps=polish_steps,
+        init_usage_scale=resolved_init_scale,
+        polish_steps=resolved_polish,
         revive_points=rev_points,
         steps_per_epoch=steps_ep,
     )

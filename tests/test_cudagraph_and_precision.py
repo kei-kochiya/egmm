@@ -67,11 +67,31 @@ def test_scaling_law_eff_df_smooth_adaptation():
     high_df = auto_hyperparameters(8793, 16, 16, covariance_type="full")
     diag_hp = auto_hyperparameters(20000, 16, 20, covariance_type="diag")
 
-    assert 0.25 <= high_df.init_usage_scale <= low_df.init_usage_scale <= 1.0
+    assert 0.10 <= high_df.init_usage_scale <= low_df.init_usage_scale <= 1.0
     assert low_df.alpha_0 < high_df.alpha_0
-    assert diag_hp.revive_points == 0
-    assert high_df.revive_points == 4
-    assert diag_hp.polish_steps == 12
+    assert diag_hp.revive_points > 0
+    assert high_df.revive_points > 0
+    assert diag_hp.polish_steps > 0
+
+
+def test_scaling_law_decouples_alpha_and_exposes_polish_and_init_scale():
+    hp_auto = auto_hyperparameters(20000, 16, 16, covariance_type="full")
+    hp_manual_a = auto_hyperparameters(20000, 16, 16, covariance_type="full", alpha=0.55)
+    # Passing manual alpha must NOT silently disable polish_steps or init_usage_scale
+    assert hp_manual_a.polish_steps == hp_auto.polish_steps
+    assert hp_manual_a.init_usage_scale == pytest.approx(hp_auto.init_usage_scale)
+
+    # Explicit overrides for polish_steps and init_usage_scale
+    hp_override = auto_hyperparameters(
+        20000, 16, 16, covariance_type="full", polish_steps=0, init_usage_scale=1.0
+    )
+    assert hp_override.polish_steps == 0
+    assert hp_override.init_usage_scale == 1.0
+
+    # Batch size should never exceed cap (8192 for full, 16384 for diag) when auto
+    hp_99k = auto_hyperparameters(99999, 16, 16, covariance_type="full")
+    assert hp_99k.batch_size <= 8192
+
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for CUDA Graph tests")

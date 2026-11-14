@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 import torch
+from sklearn.base import BaseEstimator, DensityMixin
+from sklearn.mixture import GaussianMixture
 
 from egmm.estimator import EGMM
 from egmm.kernels import (
@@ -154,6 +156,8 @@ class CappeMoulinesOnlineGMM(EGMM):
         dtype: str = "float32",
         random_state: int | None = None,
         verbose: int = 0,
+        polish_steps: int | str = 0,
+        init_usage_scale: float | str = 1.0,
     ) -> None:
         super().__init__(
             n_components=n_components,
@@ -170,6 +174,8 @@ class CappeMoulinesOnlineGMM(EGMM):
             dtype=dtype,
             random_state=random_state,
             verbose=verbose,
+            polish_steps=polish_steps,
+            init_usage_scale=init_usage_scale,
         )
         self.rho = rho
         self.t0 = t0
@@ -196,6 +202,8 @@ class NaiveMinibatchGMM(EGMM):
         dtype: str = "float32",
         random_state: int | None = None,
         verbose: int = 0,
+        polish_steps: int | str = 0,
+        init_usage_scale: float | str = 1.0,
     ) -> None:
         super().__init__(
             n_components=n_components,
@@ -212,6 +220,8 @@ class NaiveMinibatchGMM(EGMM):
             dtype=dtype,
             random_state=random_state,
             verbose=verbose,
+            polish_steps=polish_steps,
+            init_usage_scale=init_usage_scale,
         )
 
     def _step_alpha(self, step: int, total_steps: int, hp: Any) -> float:
@@ -322,3 +332,92 @@ class EMeansInitGMM(TorchBatchGMM):
         self.revivals_count_ = 0
         self._sync_public_attributes(w, m, c, pf, ldh)
         return self
+
+
+class StandardizedSklearnGMM(BaseEstimator, DensityMixin):
+    """Scale-invariant wrapper around sklearn.mixture.GaussianMixture.
+
+    Applies feature-wise standardization with std floor 1e-6 (identical to EGMM
+    and TorchBatchGMM) so that ``reg_covar=1e-6`` acts in standardized coordinates
+    rather than raw coordinates, and adjusts all log-likelihoods by the exact
+    change-of-variables log-Jacobian J = -sum(log(std)).
+    """
+
+    def __init__(
+        self,
+        n_components: int = 1,
+        covariance_type: CovarianceType = "full",
+        tol: float = 1e-3,
+        reg_covar: float = 1e-6,
+        max_iter: int = 100,
+        n_init: int = 1,
+        init_params: str = "k-means++",
+        random_state: int | None = None,
+    ) -> None:
+        self.n_components = n_components
+        self.covariance_type = covariance_type
+        self.tol = tol
+        self.reg_covar = reg_covar
+        self.max_iter = max_iter
+        self.n_init = n_init
+        self.init_params = init_params
+        self.random_state = random_state
+
+    def _standardize(self, X: np.ndarray) -> np.ndarray:
+        X_arr = np.asarray(X, dtype=np.float64)
+        return (X_arr - self._mean) / self._std
+
+    def fit(self, X: np.ndarray, y: Any = None) -> StandardizedSklearnGMM:
+        X_arr = np.asarray(X, dtype=np.float64)
+        self.n_features_in_ = int(X_arr.shape[1])
+        self._mean = X_arr.mean(axis=0, keepdims=True)
+        self._std = np.maximum(X_arr.std(axis=0, keepdims=True), 1e-6)
+        self._log_jac = float(-np.log(self._std).sum())
+
+        X_std = (X_arr - self._mean) / self._std
+        self._gmm = GaussianMixture(
+            n_components=self.n_components,
+            covariance_type=self.covariance_type,
+            tol=self.tol,
+            reg_covar=self.reg_covar,
+            max_iter=self.max_iter,
+            n_init=self.n_init,
+            init_params=self.init_params,
+            random_state=self.random_state,
+        ).fit(X_std)
+
+        self.weights_ = self._gmm.weights_.copy()
+        self.means_ = self._gmm.means_ * self._std + self._mean
+        if self.covariance_type == "diag":
+            self.covariances_ = self._gmm.covariances_ * (self._std ** 2)
+        else:
+            scale_mat = self._std.T @ self._std
+            self.covariances_ = self._gmm.covariances_ * scale_mat[None, :, :]
+        self.converged_ = bool(self._gmm.converged_)
+        self.n_iter_ = int(self._gmm.n_iter_)
+        self.lower_bound_ = float(self._gmm.lower_bound_) + self._log_jac
+        return self
+
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        return self._gmm.score_samples(self._standardize(X)) + self._log_jac
+
+    def score(self, X: np.ndarray, y: Any = None) -> float:
+        return float(np.mean(self.score_samples(X)))
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        return self._gmm.predict_proba(self._standardize(X))
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return self._gmm.predict(self._standardize(X))
+
+    def _n_parameters(self) -> int:
+        return int(self._gmm._n_parameters())
+
+    def bic(self, X: np.ndarray) -> float:
+        X_arr = np.asarray(X, dtype=np.float64)
+        return float(-2.0 * self.score(X_arr) * X_arr.shape[0] + self._n_parameters() * math.log(X_arr.shape[0]))
+
+    def aic(self, X: np.ndarray) -> float:
+        X_arr = np.asarray(X, dtype=np.float64)
+        return float(-2.0 * self.score(X_arr) * X_arr.shape[0] + 2.0 * self._n_parameters())
+

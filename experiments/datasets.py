@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from sklearn.datasets import (
     fetch_california_housing,
     fetch_covtype,
@@ -135,7 +136,7 @@ def _load_openml_numeric(
     num_df = df.select_dtypes(include=[np.number])
     if num_df.shape[1] < 2:
         for col in df.columns:
-            if not np.issubdtype(df[col].dtype, np.number):
+            if not pd.api.types.is_numeric_dtype(df[col]):
                 df[col] = df[col].astype("category").cat.codes.astype(np.float64)
         num_df = df
     X = num_df.to_numpy(dtype=np.float64)
@@ -197,9 +198,17 @@ def load_benchmark_suite(data_home: str = "data/openml") -> list[DatasetSplit]:
         ("magic04", 1120, 16, "real_medium", "full", None, None),
         ("electricity", 151, 16, "real_medium", "full", None, None),
         ("shuttle", 40685, 16, "real_medium", "full", None, None),
+        ("jannis", 41168, 24, "real_medium", "full", None, None),
+        ("numerai28.6", 23517, 24, "real_medium", "full", None, None),
+        ("higgs_98k", 23512, 24, "real_medium", "full", None, None),
         ("mnist784_pca48", 554, 24, "real_highd", "full", 48, None),
         ("fashion_mnist_pca48", 40996, 24, "real_highd", "full", 48, None),
+        ("philippine", 41145, 16, "real_highd", "diag", None, None),
+        ("gas_drift", 1476, 16, "real_highd", "diag", None, None),
+        ("har", 1478, 16, "real_highd", "diag", None, None),
         ("miniboone", 41150, 24, "real_large", "diag", None, None),
+        ("skin_nonskin", 1502, 16, "real_large", "full", None, None),
+        ("creditcard", 1597, 24, "real_large", "full", None, None),
     ]
     for idx, (name, did, K, reg, cov_t, pdim, mrows) in enumerate(openml_specs):
         try:
@@ -272,6 +281,29 @@ def load_benchmark_suite(data_home: str = "data/openml") -> list[DatasetSplit]:
                 20007,
                 "diag",
                 anisotropy=10.0,
+                diag_only=True,
+            ),
+            _make_hard_synthetic(
+                "syn_scale300k_k64_full",
+                "syn_large",
+                300_000,
+                24,
+                64,
+                20008,
+                "full",
+                anisotropy=14.0,
+                dirichlet_alpha=0.6,
+            ),
+            _make_hard_synthetic(
+                "syn_scale400k_d256_diag",
+                "syn_large",
+                400_000,
+                256,
+                48,
+                20009,
+                "diag",
+                anisotropy=12.0,
+                dirichlet_alpha=0.8,
                 diag_only=True,
             ),
         ]

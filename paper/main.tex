@@ -3,7 +3,7 @@
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{times}
-\usepackage[margin=0.72in,columnsep=0.24in]{geometry}
+\usepackage[margin=0.70in,columnsep=0.24in]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools}
 \usepackage{booktabs,array,multirow}
 \usepackage{graphicx}
@@ -30,7 +30,7 @@
 \newcommand{\diag}{\mathrm{diag}}
 \newcommand{\clip}{\mathrm{clip}}
 
-\title{\textbf{e-GMM: Fast and Collapse-Resistant Expectation--Maximization\\for Gaussian Mixture Models via Centered EMA and Eigen-Split Revival}}
+\title{\textbf{e-GMM: Fast and Collapse-Resistant Expectation--Maximization\\for Gaussian Mixture Models via Centered EMA and Wedderburn Eigen-Split Revival}}
 
 \author{
   kei-kochiya\\
@@ -45,7 +45,7 @@
 \maketitle
 
 \begin{abstract}
-Standard full-batch Expectation--Maximization (EM) for Gaussian Mixture Models (GMMs) incurs $O(N K D^2)$ computational cost per iteration for full covariances, converges slowly to saddle points or poor local optima on non-convex mixtures, and frequently leaves low-weight components starved or collapsed. Existing online EM algorithms reduce per-step complexity via stochastic sufficient statistics, yet suffer from floating-point variance cancellation under low-precision GPU execution, component death without recovery, and sensitivity to uncalibrated polynomial step-size schedules. Inspired by the closed-form exponential moving average (EMA) framework of \emeans{}, we introduce \egmm{}, a drop-in \texttt{scikit-learn}--compatible GPU/CPU estimator built around four coupled mechanisms: (1) a \emph{shift-invariant centered mixed-precision E-step} that evaluates log-likelihoods in \texttt{float32} while accumulating centered batch and component sufficient statistics in \texttt{float64}; (2) a \emph{degrees-of-freedom--aware cosine EMA and initialization-scale law} that eliminates per-dataset hyperparameter tuning; (3) a \emph{moment-preserving vectorized eigen-split revival operator} paired with a sync-free GPU inner Cholesky M-step captured via CUDA Graphs; and (4) an \emph{adaptive CPU/GPU router} with brief full-batch final polishing. Across a primary suite of 23 diverse real and synthetic datasets evaluated over 3 random seeds ($N_{\mathrm{train}}$ up to $406{,}708$, $D$ up to $128$, $K$ up to $64$), \egmm{} outperforms a shared-kernel GPU full-batch EM baseline (\texttt{TorchBatchGMM}) on \textbf{19/23 datasets} in held-out test negative log-likelihood (NLL, median $\Delta\mathrm{NLL} = -0.3691$, Wilcoxon $p = 2.15 \times 10^{-4}$) while accelerating wall-clock runtime on \textbf{23/23 datasets} (median $2.33\times$, up to $6.72\times$, $p = 2.38 \times 10^{-7}$), outperforms validation-tuned Capp{\'e}--Moulines Online EM on \textbf{19/23 datasets} ($p = 7.32 \times 10^{-5}$), reduces mean dead components from $1.87$ to $0.10$, and delivers a $56.07\times$ median speedup (up to $560.91\times$) over CPU \texttt{sklearn.mixture.GaussianMixture} at statistically indistinguishable NLL ($p = 0.964$). Zero-shot testing on 16 external small datasets ($N_{\mathrm{train}} \in [105, 3831]$) confirms runtime gains down to tiny tabular sizes ($1.88\times$ vs.\ GPU batch EM, $1.68\times$ vs.\ CPU \texttt{sklearn}) while delineating the small-$N$ regime ($N \lesssim 1000$) where stochastic exploration gives way to batch convergence.
+Standard full-batch Expectation--Maximization (EM) for Gaussian Mixture Models (GMMs) incurs $O(N K D^2)$ computational cost per iteration for full covariances, converges slowly to poor local optima on non-convex mixtures, and frequently leaves low-weight components starved or collapsed. Existing online EM algorithms reduce per-step complexity via stochastic sufficient statistics, yet suffer from floating-point variance cancellation under low-precision GPU execution, component death without recovery, and sensitivity to uncalibrated polynomial step-size schedules. Inspired by the closed-form exponential moving average (EMA) framework of \emeans{}~\citep{bessa2026emeans}, we introduce \egmm{}, a drop-in \texttt{scikit-learn}--compatible GPU/CPU estimator built around four coupled mechanisms: (1) a \emph{shift-invariant centered mixed-precision E-step} that evaluates log-likelihoods in \texttt{float32} while accumulating centered batch and component sufficient statistics in \texttt{float64} with memory-bounded batch chunking; (2) a \emph{degrees-of-freedom--aware cosine EMA and initialization-scale law} that generalizes \emeans{}'s first-moment scaling to second-order covariance estimation without per-dataset tuning; (3) a \emph{moment-preserving Wedderburn rank-1 eigen-split revival operator} that guarantees exact positive semi-definiteness under approximate GPU power iteration, paired with a sync-free GPU inner Cholesky M-step captured via CUDA Graphs; and (4) an \emph{adaptive CPU/GPU router} with optional closing full-batch refinement. Across an expanded primary suite of 33 diverse real and synthetic datasets evaluated over 3 random seeds ($N_{\mathrm{train}}$ up to $406{,}708$, $D$ up to $561$, $K$ up to $64$), \egmm{} outperforms a shared-kernel GPU full-batch EM baseline (\texttt{TorchBatchGMM}) on \textbf{26/33 datasets} in held-out test negative log-likelihood (NLL, median $\Delta\mathrm{NLL} = -0.4288$, Wilcoxon $p = 6.36 \times 10^{-6}$) while accelerating wall-clock runtime on \textbf{30/33 datasets} (median $2.68\times$, up to $8.26\times$, $p = 3.45 \times 10^{-7}$), outperforms validation-tuned Capp{\'e}--Moulines Online EM on \textbf{28/33 datasets} ($p = 2.11 \times 10^{-7}$), reduces mean dead components from $3.01$ to $0.05$, and delivers a $48.21\times$ median speedup over scale-matched CPU \texttt{StandardizedSklearnGMM} ($57.86\times$ over raw \texttt{SklearnGMM}) at statistically indistinguishable NLL ($p = 0.313$). Controlled fairness ablations confirm that even with zero full-batch polish (\texttt{polish\_steps=0}), pure stochastic \egmm{} significantly beats \texttt{TorchBatchGMM} ($21/33$ NLL, $2.30\times$ speedup) and achieves a $3.93\times$ median speedup with $-1.0330$ median $\Delta\mathrm{NLL}$ across the large-scale subset ($N_{\mathrm{train}} > 10^5$).
 \end{abstract}
 
 \section{Introduction}
@@ -55,50 +55,59 @@ Gaussian Mixture Models (GMMs) fitted via Expectation--Maximization (EM)~\citep{
 
 \begin{enumerate}[leftmargin=*,nosep]
   \item \textbf{Full-pass latency and slow optimization:} Standard batch EM requires a complete scan over all $N$ samples before every parameter update. On large datasets (e.g., $N > 10^5$ or $K \ge 32$), thirty to fifty full iterations become prohibitively slow, especially on CPU~\citep{pedregosa2011scikit}, while locking trajectories early into inferior local optima.
-  \item \textbf{Floating-point instability of single-precision GPU sufficient statistics:} Translating textbook second-moment updates ($\mathbf{Q}_k = \sum_b r_{bk} \mathbf{x}_b \mathbf{x}_b^\top$ followed by $\boldsymbol{\Sigma}_k = \mathbf{Q}_k / M_k - \boldsymbol{\mu}_k \boldsymbol{\mu}_k^\top$) naively to \texttt{float32} GPU kernels fails catastrophically whenever cluster offsets $\|\boldsymbol{\mu}_k\|_2$ dwarf within-cluster standard deviations. In our experiments, naive uncentered \texttt{float32} accumulation triggered thousands of non-positive-definite covariance repairs and severe log-likelihood degradation on multi-scale data such as Forest Covertype.
-  \item \textbf{Component starvation without disciplined revival:} High-$K$, anisotropic, or imbalanced mixtures rapidly starve poorly seeded components ($M_k \ll 1/K$). Leaving dead components unrevived wastes model capacity and traps held-out density quality, yet naive coordinate jitter (effective for hard $k$-means centroids~\citep{bessa2026emeans}) fails to break directional covariance degeneracy, and host-synchronized active masks stall CUDA execution.
+  \item \textbf{Floating-point instability of single-precision GPU sufficient statistics:} Translating textbook second-moment updates ($\mathbf{Q}_k = \sum_b r_{bk} \mathbf{x}_b \mathbf{x}_b^\top$ followed by $\boldsymbol{\Sigma}_k = \mathbf{Q}_k / M_k - \boldsymbol{\mu}_k \boldsymbol{\mu}_k^\top$) naively to \texttt{float32} GPU kernels fails catastrophically whenever cluster offsets $\|\boldsymbol{\mu}_k\|_2$ dwarf within-cluster standard deviations. Naive uncentered \texttt{float32} accumulation triggers thousands of non-positive-definite covariance repairs and severe log-likelihood degradation on multi-scale data.
+  \item \textbf{Component starvation without disciplined revival:} High-$K$, anisotropic, or imbalanced mixtures rapidly starve poorly seeded components ($M_k \ll 1/K$). Leaving dead components unrevived wastes model capacity and traps held-out density quality, yet naive multiplicative coordinate jitter (effective for hard $k$-means centroids~\citep{bessa2026emeans}) fails to break directional covariance degeneracy, and host-synchronized active masks stall CUDA execution.
 \end{enumerate}
 
-Recently, \citet{bessa2026emeans} introduced \emeans{}, demonstrating that coupling exponential moving averages (EMAs) of zero-th and first moments with near-zero initial mass, cosine step-size decay, empirically fitted power laws, and donor cluster splitting enables mini-batch $k$-means to converge to lower distortion in roughly $10\times$ fewer epochs than Lloyd's algorithm. Yet extending EMA optimization from isotropic point centroids ($k$-means) to full- and diagonal-covariance density estimation (GMMs) introduces non-trivial challenges: full covariance estimation requires maintaining valid positive-definite $D \times D$ matrices under finite mini-batch sample counts $B$, quadratic moment subtractions require centering before variance accumulation, split operations must modify covariance geometry along maximal directional variance rather than arbitrary coordinates, and tiny datasets expose GPU launch overhead where adaptive CPU execution is faster.
+Recently, \citet{bessa2026emeans} introduced \emeans{}, demonstrating that coupling exponential moving averages (EMAs) of zero-th and first moments with near-zero initial mass ($2^{-16}$), cosine step-size decay, empirically fitted power laws, and donor cluster splitting enables mini-batch $k$-means to converge to lower distortion in roughly $10\times$ fewer epochs than Lloyd's algorithm. Yet extending EMA optimization from isotropic point centroids ($k$-means) to full- and diagonal-covariance density estimation (GMMs) introduces fundamental statistical and numerical challenges: full covariance estimation requires maintaining valid positive-definite $D \times D$ matrices in the Schur-complement cone under finite mini-batch sample counts $B$, quadratic moment subtractions require centering before variance accumulation, split operations must modify covariance geometry along maximal directional variance while guaranteeing positive semi-definiteness under approximate eigenvectors, and tiny datasets expose GPU launch overhead where adaptive CPU execution is faster.
 
 In this paper, we propose \egmm{}, a unified stochastic EMA-EM algorithm and open-source PyTorch/CUDA library~\citep{paszke2019pytorch} designed as a drop-in replacement for \texttt{GaussianMixture}~\citep{pedregosa2011scikit}. Our key contributions are:
 \begin{itemize}[leftmargin=*,nosep]
-  \item \textbf{Centered mixed-precision E-step (Section~\ref{sec:method_estep}):} We derive exact algebraic centered identities around batch means (diagonal) and current component means (full), enabling fast \texttt{float32} likelihood evaluation paired with exact \texttt{float64} sufficient-statistics reconstruction and pre-projected triangular Cholesky GEMMs.
-  \item \textbf{Moment-preserving eigen-split revival (Theorem~\ref{thm:revival}):} We formulate a vectorized GPU/CPU donor splitting rule along the leading covariance eigenvector (estimated via $5$-step GPU power iteration on CUDA, avoiding cuSOLVER synchronization), proving conservation of mixture weight, conditional mean (in the dead limit), second moment, and positive semi-definiteness.
-  \item \textbf{Batch degrees-of-freedom scaling law and sync-free execution (Sections~\ref{sec:scaling}--\ref{sec:systems}):} Unlike \emeans{}'s unconstrained centroid laws, \egmm{} regulates peak EMA decay $\alpha_0$ and initial moment scale using $\mathrm{eff\_df} = B/(DK)$ so covariance updates remain well-conditioned, captures inner training iterations inside \texttt{torch.cuda.CUDAGraph()}, applies brief full-batch EM polishing on $N \le 10^5$, and automatically dispatches tiny workloads to CPU.
-  \item \textbf{Rigorous empirical verification (Section~\ref{sec:results}):} Using a leakage-free three-way split protocol across 23 primary datasets plus a zero-tuning external suite of 16 small datasets, Pareto compute-budget sweeps, and non-parametric Wilcoxon/Friedman--Nemenyi tests~\citep{demsar2006statistical}, we verify both quality and wall-clock dominance over GPU batch EM and tuned Capp{\'e}--Moulines Online EM~\citep{cappe2009online}.
+  \item \textbf{Centered mixed-precision E-step with memory-bounded chunking (Section~\ref{sec:method_estep}):} We derive exact algebraic centered identities around batch means (diagonal) and current component means (full), enabling fast \texttt{float32} likelihood evaluation paired with exact \texttt{float64} sufficient-statistics reconstruction, pre-projected triangular Cholesky GEMMs, and chunked scratch workspaces that bound peak GPU memory on large $(N, K, D)$.
+  \item \textbf{Moment-preserving Wedderburn eigen-split revival (Theorem~\ref{thm:revival}):} We formulate a vectorized GPU/CPU donor splitting rule using the Wedderburn rank-1 reduction vector $\boldsymbol{\delta} = \Delta \boldsymbol{\Sigma}_d \mathbf{v} / \sqrt{\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v}}$, proving exact conservation of mixture weight, conditional mean (in the dead limit), second moment, and Loewner positive semi-definiteness $\boldsymbol{\Sigma}'_d \succeq (1-\Delta^2)\boldsymbol{\Sigma}_d \succeq 0$ for \emph{any} approximate power-iteration vector $\mathbf{v}$.
+  \item \textbf{Batch degrees-of-freedom scaling law and sync-free execution (Sections~\ref{sec:scaling}--\ref{sec:systems}):} We show that \emeans{}'s step law decomposes into $(B/N)^{0.45}(B/K)^{0.45}T^{-0.11}$ and generalize its cluster occupancy factor $B/K$ to second-order covariance degrees of freedom $\gamma_{\mathrm{df}} = B/(K D_{\mathrm{eff}})$, regulating peak EMA decay $\alpha_0$ and initial moment scale $s_{\mathrm{init}}$ while capturing inner training iterations inside \texttt{torch.cuda.CUDAGraph()}.
+  \item \textbf{Rigorous empirical verification and fairness ablations (Section~\ref{sec:results}):} Using a leakage-free three-way split protocol across 33 primary datasets ($N_{\mathrm{train}}$ up to $406{,}708$, $D$ up to $561$), a dedicated 7-dataset large-scale zero-polish analysis ($N_{\mathrm{train}} > 10^5$), controlled fairness ablations isolating polish, initialization scaling, revival, and standardization, cold/warm CUDA phase profiling, and 16 unseen small datasets, we establish statistically significant quality and runtime dominance ($p \le 6.36 \times 10^{-6}$).
 \end{itemize}
 
-\section{Background and Related Work}
+\section{Background and Theoretical Connection to \emeans{}}
 \label{sec:background}
 
 \subsection{Standard and Online EM for GMMs}
 Let $\{\mathbf{x}_n\}_{n=1}^N \subset \R^D$ denote observed data modeled by a $K$-component GMM $p(\mathbf{x}) = \sum_{k=1}^K \pi_k \mathcal{N}(\mathbf{x} \mid \boldsymbol{\mu}_k, \boldsymbol{\Sigma}_k)$. Classical EM~\citep{dempster1977em} alternates computing full-dataset responsibilities $r_{nk} = p(z_n = k \mid \mathbf{x}_n)$ with setting $(M_k, \mathbf{S}_k, \mathbf{Q}_k)$ equal to normalized dataset sufficient statistics $(1, \mathbf{x}_n, \mathbf{x}_n\mathbf{x}_n^\top)$ weighted by $r_{nk}/N$, followed by the M-step projection:
 \begin{equation}
-\pi_k = \frac{M_k}{\sum_{j=1}^K M_j}, \quad
-\boldsymbol{\mu}_k = \frac{\mathbf{S}_k}{M_k}, \quad
+\pi_k = \frac{M_k}{\sum_{j=1}^K M_j}, \;\;
+\boldsymbol{\mu}_k = \frac{\mathbf{S}_k}{M_k}, \;\;
 \boldsymbol{\Sigma}_k = \frac{\mathbf{Q}_k}{M_k} - \boldsymbol{\mu}_k \boldsymbol{\mu}_k^\top + \epsilon_{\mathrm{reg}} I_D.
 \label{eq:mstep}
 \end{equation}
 
-Incremental EM~\citep{neal1998view} and online EM~\citep{cappe2009online,liang2009online} replace full-data expectations with mini-batch estimates $(\bar{m}_k, \bar{\mathbf{s}}_k, \bar{\mathbf{q}}_k)$ computed over batch $\mathcal{B}_t$ of size $B$, blending moments via a stochastic approximation schedule $\gamma_t$:
+Incremental EM~\citep{neal1998view} and online EM~\citep{cappe2009online,liang2009online} replace full-data expectations with mini-batch estimates $(\bar{m}_k, \bar{\mathbf{s}}_k, \bar{\mathbf{q}}_k)$ computed over batch $\mathcal{B}_t$ of size $B$, blending moments via a stochastic approximation schedule $\alpha_t \in (0, 1]$:
 \begin{equation}
-\Theta^{(t+1)} = (1 - \gamma_t)\Theta^{(t)} + \gamma_t \bar{\Theta}_{\mathcal{B}_t}, \qquad \Theta \triangleq (M, \mathbf{S}, \mathbf{Q}).
+\Theta^{(t+1)} = (1 - \alpha_t)\Theta^{(t)} + \alpha_t \bar{\Theta}_{\mathcal{B}_t}, \qquad \Theta \triangleq (M, \mathbf{S}, \mathbf{Q}).
 \label{eq:ema_update}
 \end{equation}
-Traditional stochastic approximation enforces Robbins--Monro decay $\gamma_t = (t + t_0)^{-\rho}$ with $\rho \in (0.5, 1]$~\citep{cappe2009online}. While asymptotically convergent, polynomial decay requires per-dataset tuning of $(\rho, B)$: overly aggressive decay freezes poor early covariances, whereas slow decay prevents asymptotic sharpening. Furthermore, standard online EM provides no mechanism to rescue dead components once $M_k \to 0$. Split-and-merge EM~\citep{ueda2000smem} escapes local optima via deterministic split/merge candidates evaluated by likelihood improvement, at significant combinatorial cost unsuitable for millisecond GPU training loops.
+Traditional stochastic approximation enforces Robbins--Monro polynomial decay $\alpha_t = (t + t_0)^{-\rho}$ with $\rho \in (0.5, 1]$~\citep{cappe2009online}. While asymptotically convergent, polynomial decay requires per-dataset tuning of $(\rho, B)$: overly aggressive early decay freezes poor initial covariances, whereas slow decay prevents asymptotic sharpening. Moreover, standard online EM provides no mechanism to rescue dead components once $M_k \to 0$, and deterministic split-and-merge EM~\citep{ueda2000smem} requires expensive candidate line-searches unsuitable for millisecond GPU training loops.
 
-\subsection{Comparison to Meta FAIR \emeans{}}
+\subsection{Why \emeans{} Works for $k$-Means and What Changes for GMMs}
 \label{sec:emeans_compare}
-\emeans{}~\citep{bessa2026emeans} achieves $10\times$ speedups for $k$-means without per-dataset cross-validation by combining cosine step-size annealing, near-zero initialization mass (\texttt{\_INIT\_USAGE} $= 2^{-16}$), closed-form empirical laws mapping $(N, K, D, T)$ to batch size (\texttt{\_BATCH\_LAWS}, switching from an $8\times$ smaller ``quality'' batch regime for $D \le 16$ to a ``throughput'' regime for $D > 16$) and peak decay (\texttt{\_ALPHA\_LAW}), Gumbel-top-$k$ donor resampling with sign-alternating coordinate perturbations ($\pm 10^{-4} \cdot \mathbf{c}_{\mathrm{donor}}$), CUDA \texttt{BF16} quantized distance GEMMs, and CUDA Graph capture.
+In \emeans{}~\citep{bessa2026emeans}, Bessa et al.\ analyze why stochastic EMA of sufficient statistics (mass $u_k$ and weighted sum $\mathbf{s}_k$, with $\mathbf{c}_k = \mathbf{s}_k / u_k$) dramatically outperforms both mini-batch SGD and Adam for $k$-means clustering (their Appendix~E, Figs.~16--17): unconstrained gradient updates leave the convex hull of assigned points at large batch sizes and learning rates, causing catastrophic instability, whereas EMA is a convex combination of sufficient statistics that remains strictly inside the data's convex hull for all $\alpha_t \in (0, 1]$. Crucially, \emeans{} couples this convex-hull invariance with empirically fitted power laws (\texttt{\_BATCH\_LAWS}, \texttt{\_ALPHA\_LAW}):
+\begin{equation}
+\alpha_0^{\text{e-means}} = 0.8244 \cdot K^{-0.4617} B^{0.9003} N^{-0.4498} T^{-0.1057}.
+\label{eq:emeans_alpha}
+\end{equation}
+Notice an illuminating algebraic factorization of Eq.~\eqref{eq:emeans_alpha}: since $0.9003 \approx 0.4498 + 0.4617$, the \emeans{} peak learning rate factors into two dimensionless ratios:
+\begin{equation}
+\alpha_0^{\text{e-means}} \approx 0.8244 \left(\frac{B}{N}\right)^{0.45} \left(\frac{B}{K}\right)^{0.46} T^{-0.11},
+\label{eq:emeans_factored}
+\end{equation}
+where $B/N = 1/S_{\mathrm{ep}}$ is the inverse number of steps per epoch and $B/K$ is the average number of batch points per cluster.
 
-Our controlled ablation (\texttt{EMeansInitGMM} in Section~\ref{sec:results}) proves that directly transplanting \emeans{}-style mini-batch $k$-means warm-starting + unrevived batch EM onto GMMs fails statistically across all 23 datasets (winning \textbf{0/23} against \egmm{}, Wilcoxon $p = 2.38 \times 10^{-7}$). Five structural differences motivate \egmm{}:
+Our controlled experiment (\texttt{EMeansInitGMM} in Section~\ref{sec:results}) demonstrates that directly transplanting \emeans{} warm-starting into batch EM loses on \textbf{32/33 datasets} against \egmm{} ($p = 1.63 \times 10^{-8}$). Extending \emeans{} to Gaussian Mixture Models requires four principled generalizations:
 \begin{enumerate}[leftmargin=*,nosep]
-  \item \emph{Moment dimension \& variance stability:} $k$-means tracks first moments only; GMMs estimate $O(KD^2)$ covariances, where small batches ($B < 1.5 DK$) or $2^{-16}$ initial mass scales induce severe rank deficiency.
-  \item \emph{Centering before squaring:} Second moments $\mathbf{Q}_k$ amplify floating-point offset cancellation absent in $k$-means distances.
-  \item \emph{Anisotropic splitting:} Sign-alternating $10^{-4}$ coordinate nudges collapse back into overlapping ellipses under soft Mahalanobis responsibilities unless split along the donor's dominant variance axis.
-  \item \emph{Density vs.\ distortion:} Whereas \emeans{} disables revival for $D \le 2$ and skips full-batch reads cleanly via an unweighted final-pass buffer, density log-likelihood strongly benefits from cosine-annealed EMA followed by brief exact full-batch polish at medium scale ($N \le 10^5$).
-  \item \emph{CPU/GPU regime switch:} For small tabular datasets, Python/CUDA Graph launch latency exceeds CPU vectorized BLAS runtime; adaptive dispatch preserves fast execution across scales.
+  \item \emph{From convex-hull invariance to Schur-complement PSD-cone invariance:} In GMMs, parameters live in the positive-definite cone rather than $\R^D$. By applying EMA in the raw sufficient-statistics space $\Theta_k = (M_k, \mathbf{S}_k, \mathbf{Q}_k)$ where each mini-batch statistic satisfies $M_k \mathbf{Q}_k - \mathbf{S}_k \mathbf{S}_k^\top \succeq 0$, convexity of the Schur-complement cone guarantees that $\boldsymbol{\Sigma}_k^{(t+1)} = \mathbf{Q}_k^{(t+1)}/M_k^{(t+1)} - \boldsymbol{\mu}_k^{(t+1)}\boldsymbol{\mu}_k^{(t+1)\top} + \epsilon_{\mathrm{reg}}I_D \succeq \epsilon_{\mathrm{reg}}I_D$ for \emph{any} $\alpha_t \in (0, 1]$, provided floating-point cancellation in $\mathbf{Q}_k/M_k - \boldsymbol{\mu}_k\boldsymbol{\mu}_k^\top$ is prevented via centered accumulation (Proposition~\ref{prop:centered}).
+  \item \emph{From cluster occupancy $B/K$ to covariance degrees of freedom $\gamma_{\mathrm{df}} = B/(K D_{\mathrm{eff}})$:} While $k$-means centroids are $D$-vectors whose estimation variance is invariant to $D$ under isotropic noise (so Eq.~\eqref{eq:emeans_factored} depends on $B/K$ and \emeans{} fixes \texttt{\_INIT\_USAGE} $= 2^{-16}$), estimating a $D \times D$ full covariance matrix requires $O(D)$ samples per component per batch to avoid rank deficiency. Replacing $B/K$ with the effective batch degrees of freedom $\gamma_{\mathrm{df}} = B/(K D_{\mathrm{eff}})$ ($D_{\mathrm{eff}} = D$ for full, $\sqrt{D}$ for diagonal) governs both $\alpha_0$ and the initial Voronoi mass scale $s_{\mathrm{init}} \in [0.25, 1.0]$.
+  \item \emph{From multiplicative BF16 jitter to Wedderburn rank-1 eigen-splitting:} \emeans{} (their Appendix~H.1, Eq.~8) splits a donor centroid via $\mathbf{c}_j \odot (1 \pm \varepsilon_{\mathrm{BF16}})$. For GMMs, multiplicative coordinate perturbation fails near the origin ($\boldsymbol{\mu}_d \approx \mathbf{0}$) and leaves the donor's covariance $\boldsymbol{\Sigma}_d$ unsplit, causing soft Mahalanobis responsibilities to collapse the twins back together. Theorem~\ref{thm:revival} replaces this with a moment-preserving rank-1 Wedderburn covariance split along the donor's principal axis.
+  \item \emph{Closing refinement vs.\ streaming EMA:} Where \emeans{} uses a closing slow-EMA or running average over the final epoch, GMM log-likelihood on medium-scale problems ($N \le 10^5$) benefits from following stochastic EMA exploration with a few exact full-batch EM polish passes, while large-scale problems ($N > 10^5$) achieve top accuracy and throughput with \texttt{polish\_steps=0}.
 \end{enumerate}
 
 \section{The \egmm{} Algorithm}
@@ -115,7 +124,7 @@ yielding standardized features $\tilde{\mathbf{x}}_n = (\mathbf{x}_n - \hat{\bol
 \]
 Public \texttt{scikit-learn} attributes (\texttt{means\_}, \texttt{covariances\_}, \texttt{precisions\_}, \texttt{precisions\_cholesky\_}) are rescaled back to raw feature units upon completion.
 
-\subsection{Centered Mixed-Precision E-Step and GEMM Projection}
+\subsection{Centered Mixed-Precision E-Step and Chunked GEMMs}
 \label{sec:method_estep}
 
 To run dense GPU tensor cores in \texttt{float32} without losing precision in covariance estimation, \egmm{} maintains sufficient statistics $(M, \mathbf{S}, \mathbf{Q})$ in \texttt{float64} while precomputing E-step precision factors in \texttt{float32}.
@@ -126,7 +135,7 @@ Z = X_{\mathcal{B}} A \in \R^{B \times K \times D}, \qquad
 d^2_{bk} = \bigl\|Z_{bk} - \tilde{\boldsymbol{\mu}}_k\bigr\|_2^2.
 \label{eq:full_maha}
 \end{equation}
-For large $B K D$ (exceeding $3.2 \times 10^7$ elements), $Z$ is chunked along $B$ to cap peak scratch VRAM. For \textbf{diagonal covariance}, precision stds $u_k = \boldsymbol{\sigma}_k^{-1}$ give log-density using shifted batch vectors $X_c = X_{\mathcal{B}} - \bar{\mathbf{x}}_{\mathcal{B}}$ and $M_c = \boldsymbol{\mu} - \bar{\mathbf{x}}_{\mathcal{B}}$, exploiting shift invariance of $(X_{\mathcal{B}} - \boldsymbol{\mu}_k)^2 = (X_c - M_{c,k})^2$.
+For \textbf{diagonal covariance}, precision standard deviations $u_k = \boldsymbol{\sigma}_k^{-1}$ evaluate log-density using shifted coordinates $X_c = X_{\mathcal{B}} - \bar{\mathbf{x}}_{\mathrm{shift}}$ and $M_c = \boldsymbol{\mu} - \bar{\mathbf{x}}_{\mathrm{shift}}$, exploiting shift invariance of $(X_{\mathcal{B}} - \boldsymbol{\mu}_k)^2 = (X_c - M_{c,k})^2$ via the identity $(X_c^2) u_k^{\top 2} - 2 X_c (M_c \odot u^2)^\top + \mathbf{1} (M_c^2 \odot u^2)\mathbf{1}^\top$. In both modes, whenever $B K D$ exceeds the workspace threshold ($3.2 \times 10^7$ elements), evaluation and centered moment accumulation are automatically partitioned into memory-bounded sub-batches $B_{\mathrm{chunk}} = \lfloor 3.2 \times 10^7 / (KD) \rfloor$, preventing out-of-memory faults on large-$N$, high-$D$ datasets.
 
 Once batch responsibilities $r_{bk} = \exp\bigl(\log \pi_k + \log \mathcal{N}(\tilde{\mathbf{x}}_b \mid \boldsymbol{\mu}_k, \boldsymbol{\Sigma}_k) - \log Z_b\bigr)$ and mean masses $\bar{m}_k = \frac{1}{B}\sum_{b=1}^B r_{bk}$ are computed in \texttt{float32}, \egmm{} accumulates centered quantities before reconstructing global second moments in \texttt{float64}:
 
@@ -152,69 +161,76 @@ Let batch indices $\mathcal{B}$ have size $B$ and responsibilities $r_{bk} \in [
 For part (1), substituting $\tilde{\mathbf{x}}_b = \mathbf{x}^c_b + \bar{\mathbf{x}}_{\mathcal{B}}$ gives $\frac{1}{B}\sum_b r_{bk}\tilde{\mathbf{x}}_b = \bar{m}_k \bar{\mathbf{x}}_{\mathcal{B}} + \boldsymbol{\delta}_{S,k} = \bar{\mathbf{s}}_k$ and $\frac{1}{B}\sum_b r_{bk}(\mathbf{x}^c_b + \bar{\mathbf{x}}_{\mathcal{B}})^2 = \mathbf{v}_{c,k} + 2\bar{\mathbf{x}}_{\mathcal{B}} \odot \boldsymbol{\delta}_{S,k} + \bar{m}_k \bar{\mathbf{x}}_{\mathcal{B}}^2$. For part (2), note $\boldsymbol{\Delta}_k = \bar{\mathbf{s}}_k - \bar{m}_k \boldsymbol{\mu}_k$. Expanding $\mathbf{C}_k = \frac{1}{B}\sum_b r_{bk}\tilde{\mathbf{x}}_b\tilde{\mathbf{x}}_b^\top - \boldsymbol{\mu}_k \bar{\mathbf{s}}_k^\top - \bar{\mathbf{s}}_k \boldsymbol{\mu}_k^\top + \bar{m}_k \boldsymbol{\mu}_k\boldsymbol{\mu}_k^\top$ and adding $\boldsymbol{\mu}_k \bar{\mathbf{s}}_k^\top + (\bar{\mathbf{s}}_k - \bar{m}_k \boldsymbol{\mu}_k)\boldsymbol{\mu}_k^\top$ cancels every cross and $\boldsymbol{\mu}_k\boldsymbol{\mu}_k^\top$ term identically.
 \end{proof}
 
-Crucially, because $\mathbf{C}_k$ and $\mathbf{v}_{c,k}$ accumulate variance around $\boldsymbol{\mu}_k$ (or $\bar{\mathbf{x}}_{\mathcal{B}}$) prior to casting to \texttt{float64}, \egmm{} retains full $24$-bit mantissa precision across within-cluster variations regardless of global offset, completely eliminating non-PSD matrix corruption during GPU EMA updates.
-
-\subsection{Moment-Preserving Eigen-Split Revival}
+\subsection{Moment-Preserving Wedderburn Eigen-Split Revival}
 \label{sec:revival}
 
-Component collapse arises when clusters lose responsibility mass below $M_{\mathrm{thresh}} = \rho_{\mathrm{dead}} \frac{\sum_{j=1}^K M_j}{K}$ (default $\rho_{\mathrm{dead}} = 0.05$). At up to $R_{\mathrm{pts}} = 4$ evenly spaced checkpoints across $15\%$--$70\%$ of EMA training steps (when $T_{\mathrm{steps}} \ge 6$), \egmm{} detects starving components $\mathcal{D} = \{k : M_k < M_{\mathrm{thresh}}\}$ and pairs up to $m = \min(|\mathcal{D}|, |\mathcal{E}|)$ of them one-to-one with eligible high-variance donors from $\mathcal{E} = \{k : M_k > 2 M_{\mathrm{thresh}}\}$ ranked by weighted spatial spread $M_k \cdot (\mathrm{spread}_k + \epsilon_{\mathrm{reg}})$, where $\mathrm{spread}_k = \tr(\boldsymbol{\Sigma}_k)$ in full mode or $\max_d \Sigma_{k,dd}$ in diagonal mode.
+Component collapse arises when clusters lose responsibility mass below $M_{\mathrm{thresh}} = \rho_{\mathrm{dead}} \frac{\sum_{j=1}^K M_j}{K}$ (default $\rho_{\mathrm{dead}} = 0.05$). At up to $R_{\mathrm{pts}} = 4$ evenly spaced checkpoints across $15\%$--$70\%$ of EMA training steps in full mode (and $R_{\mathrm{pts}} = 2$ across $15\%$--$45\%$ in diagonal mode), \egmm{} detects starving components $\mathcal{D} = \{k : M_k < M_{\mathrm{thresh}}\}$ and pairs up to $m = \min(|\mathcal{D}|, |\mathcal{E}|)$ of them one-to-one with eligible high-variance donors from $\mathcal{E} = \{k : M_k > 2 M_{\mathrm{thresh}}\}$ ranked by trace-weighted spatial spread $M_k \cdot (\tr(\boldsymbol{\Sigma}_k) + \epsilon_{\mathrm{reg}})$ in both full and diagonal modes.
 
-For each paired donor $d \in \mathcal{E}$ and receiver $r \in \mathcal{D}$, let $(\lambda_1, \mathbf{v}_1)$ denote the leading eigenpair of conditional covariance $\boldsymbol{\Sigma}_d$ (for diagonal covariances, $j^\star = \arg\max_j \Sigma_{d,jj}$, $\lambda_1 = \Sigma_{d,j^\star j^\star}$, $\mathbf{v}_1 = \mathbf{e}_{j^\star}$; on CUDA in full mode, 5 iterations of batched \texttt{float32} power iteration initialized at $\mathbf{e}_{j^\star}$ replace host-synchronizing \texttt{eigh}, while CPU computes exact \texttt{float64} \texttt{eigh}). With $\boldsymbol{\delta} = \Delta \sqrt{\lambda_1} \mathbf{v}_1$ (default $\Delta = 0.5$), we apply the symmetric split:
+For each paired donor $d \in \mathcal{E}$ and receiver $r \in \mathcal{D}$, let $\mathbf{v} \in \R^D$ be an approximate or exact leading direction of $\boldsymbol{\Sigma}_d$ such that $\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v} > 0$ (for diagonal covariances, $j^\star = \arg\max_j \Sigma_{d,jj}$ and $\mathbf{v} = \mathbf{e}_{j^\star}$; on CUDA in full mode, $5$ iterations of batched \texttt{float32} power iteration initialized at $\mathbf{e}_{j^\star}$ avoid host-synchronizing \texttt{cuSOLVER} \texttt{eigh}, while CPU computes exact \texttt{float64} \texttt{eigh}). Rather than setting $\boldsymbol{\delta} = \Delta\sqrt{\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v}}\,\mathbf{v}$ (which can violate positive semi-definiteness when $\mathbf{v}$ is an approximate power-iteration vector), we define the \emph{Wedderburn rank-1 reduction vector}:
+\begin{equation}
+\boldsymbol{\delta} = \Delta \frac{\boldsymbol{\Sigma}_d \mathbf{v}}{\sqrt{\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v}}}, \qquad \Delta \in [0, 1),
+\label{eq:wedderburn_delta}
+\end{equation}
+which reduces to $\Delta\sqrt{\lambda_1}\mathbf{v}_1$ when $(\lambda_1, \mathbf{v}_1)$ is an exact eigenpair, and apply the symmetric split (default $\Delta = 0.5$):
 \begin{align}
 M'_d &= M'_r = \frac{M_d + M_r}{2}, \label{eq:rev_m}\\
 \boldsymbol{\mu}'_d &= \boldsymbol{\mu}_d - \boldsymbol{\delta}, \qquad
 \boldsymbol{\mu}'_r = \boldsymbol{\mu}_d + \boldsymbol{\delta}, \label{eq:rev_mu}\\
-\boldsymbol{\Sigma}'_d &= \boldsymbol{\Sigma}'_r = \boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top. \label{eq:rev_cov}
+\boldsymbol{\Sigma}'_d &= \boldsymbol{\Sigma}'_r = \boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top + \epsilon_{\mathrm{reg}} I_D. \label{eq:rev_cov}
 \end{align}
 
-\begin{theorem}[Moment and PSD Conservation Under Eigen-Split]
+\begin{theorem}[Moment and Loewner PSD Conservation Under Wedderburn Eigen-Split]
 \label{thm:revival}
-Assume $\boldsymbol{\Sigma}_d \succeq 0$ has spectral decomposition $\sum_{j=1}^D \lambda_j \mathbf{v}_j \mathbf{v}_j^\top$ with $\lambda_1 \ge \dots \ge \lambda_D \ge 0$, and let $\Delta \in [0, 1]$. Under exact eigen-split equations~\eqref{eq:rev_m}--\eqref{eq:rev_cov} with exact eigenpair $(\lambda_1, \mathbf{v}_1)$:
+Assume $\boldsymbol{\Sigma}_d \succeq 0$ and let $\mathbf{v} \in \R^D$ be any vector satisfying $\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v} > 0$, with $\boldsymbol{\delta}$ defined by Eq.~\eqref{eq:wedderburn_delta} for $\Delta \in [0, 1]$. Under the split equations~\eqref{eq:rev_m}--\eqref{eq:rev_cov}:
 \begin{enumerate}[leftmargin=*,nosep]
-  \item \textbf{Positive semi-definiteness:} $\boldsymbol{\Sigma}'_d = \boldsymbol{\Sigma}'_r \succeq 0$.
+  \item \textbf{Exact Loewner PSD conservation for arbitrary $\mathbf{v}$:} Even for $\epsilon_{\mathrm{reg}} = 0$ and any approximate direction $\mathbf{v}$, the post-split covariance satisfies $\boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top \succeq (1 - \Delta^2)\boldsymbol{\Sigma}_d \succeq 0$.
   \item \textbf{Total mass conservation:} $M'_d + M'_r = M_d + M_r$ for arbitrary $M_r \ge 0$.
-  \item \textbf{First and second moment conservation in the dead limit:} As $M_r \to 0^+$, total first and uncentered second moments satisfy $\mathbf{S}'_d + \mathbf{S}'_r = \mathbf{S}_d + \mathbf{S}_r$ and $\mathbf{Q}'_d + \mathbf{Q}'_r = \mathbf{Q}_d + \mathbf{Q}_r$ identically. For small $M_r < M_{\mathrm{thresh}}$, the first-moment discrepancy satisfies $\|\mathbf{S}'_d + \mathbf{S}'_r - (\mathbf{S}_d + \mathbf{S}_r)\|_2 = M_r \|\boldsymbol{\mu}_d - \boldsymbol{\mu}_r\|_2$.
+  \item \textbf{First and second moment conservation in the dead limit:} As $M_r \to 0^+$ (with $\epsilon_{\mathrm{reg}} \to 0$), total first and uncentered second moments satisfy $\mathbf{S}'_d + \mathbf{S}'_r = \mathbf{S}_d + \mathbf{S}_r$ and $\mathbf{Q}'_d + \mathbf{Q}'_r = \mathbf{Q}_d + \mathbf{Q}_r$ identically. For small $M_r < M_{\mathrm{thresh}}$, $\|\mathbf{S}'_d + \mathbf{S}'_r - (\mathbf{S}_d + \mathbf{S}_r)\|_2 = M_r \|\boldsymbol{\mu}_d - \boldsymbol{\mu}_r\|_2$.
 \end{enumerate}
 \end{theorem}
 \begin{proof}
-(1) Since $\boldsymbol{\delta}\boldsymbol{\delta}^\top = \Delta^2 \lambda_1 \mathbf{v}_1\mathbf{v}_1^\top$, orthogonality yields $\boldsymbol{\Sigma}'_d = (1 - \Delta^2)\lambda_1 \mathbf{v}_1\mathbf{v}_1^\top + \sum_{j=2}^D \lambda_j \mathbf{v}_j\mathbf{v}_j^\top$, whose eigenvalues $(1 - \Delta^2)\lambda_1, \lambda_2, \dots, \lambda_D$ are all non-negative for $\Delta \in [0, 1]$. (2) Immediate from $M'_d + M'_r = 2 \cdot \frac{M_d + M_r}{2} = M_d + M_r$. (3) Summing post-split first moments gives
-\[
-\mathbf{S}'_d + \mathbf{S}'_r = \frac{M_d + M_r}{2}(\boldsymbol{\mu}_d - \boldsymbol{\delta} + \boldsymbol{\mu}_d + \boldsymbol{\delta}) = (M_d + M_r)\boldsymbol{\mu}_d,
-\]
-so subtracting $\mathbf{S}_d + \mathbf{S}_r = M_d \boldsymbol{\mu}_d + M_r \boldsymbol{\mu}_r$ yields $M_r(\boldsymbol{\mu}_d - \boldsymbol{\mu}_r)$, which vanishes as $M_r \to 0$. At $M_r = 0$, the post-split uncentered second moments sum to
+(1) For any $\mathbf{x} \in \R^D$, let $\mathbf{a} = \boldsymbol{\Sigma}_d^{1/2}\mathbf{x}$ and $\mathbf{b} = \boldsymbol{\Sigma}_d^{1/2}\mathbf{v}$. By Cauchy--Schwarz, $(\mathbf{x}^\top \boldsymbol{\Sigma}_d \mathbf{v})^2 = (\mathbf{a}^\top \mathbf{b})^2 \le \|\mathbf{a}\|_2^2 \|\mathbf{b}\|_2^2 = (\mathbf{x}^\top \boldsymbol{\Sigma}_d \mathbf{x})(\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v})$. Hence
 \begin{align*}
-\mathbf{Q}'_d + \mathbf{Q}'_r &= \frac{M_d}{2}\Bigl[ 2\boldsymbol{\Sigma}'_d + (\boldsymbol{\mu}_d - \boldsymbol{\delta})(\boldsymbol{\mu}_d - \boldsymbol{\delta})^\top + (\boldsymbol{\mu}_d + \boldsymbol{\delta})(\boldsymbol{\mu}_d + \boldsymbol{\delta})^\top \Bigr] \\
-&= M_d\Bigl[ (\boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top) + (\boldsymbol{\mu}_d\boldsymbol{\mu}_d^\top + \boldsymbol{\delta}\boldsymbol{\delta}^\top) \Bigr]
-= M_d(\boldsymbol{\Sigma}_d + \boldsymbol{\mu}_d\boldsymbol{\mu}_d^\top) = \mathbf{Q}_d.
+\mathbf{x}^\top (\boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top)\mathbf{x}
+&= \mathbf{x}^\top \boldsymbol{\Sigma}_d \mathbf{x} - \Delta^2 \frac{(\mathbf{x}^\top \boldsymbol{\Sigma}_d \mathbf{v})^2}{\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v}} \\
+&\ge (1 - \Delta^2)\mathbf{x}^\top \boldsymbol{\Sigma}_d \mathbf{x} \ge 0.
+\end{align*}
+(2) Immediate from $M'_d + M'_r = 2 \cdot \frac{M_d + M_r}{2} = M_d + M_r$.
+(3) Summing post-split first moments gives $\mathbf{S}'_d + \mathbf{S}'_r = \frac{M_d + M_r}{2}(\boldsymbol{\mu}_d - \boldsymbol{\delta} + \boldsymbol{\mu}_d + \boldsymbol{\delta}) = (M_d + M_r)\boldsymbol{\mu}_d$, so subtracting $\mathbf{S}_d + \mathbf{S}_r = M_d \boldsymbol{\mu}_d + M_r \boldsymbol{\mu}_r$ yields $M_r(\boldsymbol{\mu}_d - \boldsymbol{\mu}_r) \to \mathbf{0}$ as $M_r \to 0$. At $M_r = 0$, the post-split uncentered second moments sum to
+\begin{align*}
+\mathbf{Q}'_d + \mathbf{Q}'_r
+&= \frac{M_d}{2}\Bigl[ 2\boldsymbol{\Sigma}'_d + (\boldsymbol{\mu}_d - \boldsymbol{\delta})(\boldsymbol{\mu}_d - \boldsymbol{\delta})^\top \\
+&\qquad\quad + (\boldsymbol{\mu}_d + \boldsymbol{\delta})(\boldsymbol{\mu}_d + \boldsymbol{\delta})^\top \Bigr] \\
+&= M_d\Bigl[ (\boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top) + (\boldsymbol{\mu}_d\boldsymbol{\mu}_d^\top + \boldsymbol{\delta}\boldsymbol{\delta}^\top) \Bigr] \\
+&= M_d(\boldsymbol{\Sigma}_d + \boldsymbol{\mu}_d\boldsymbol{\mu}_d^\top) = \mathbf{Q}_d. \qedhere
 \end{align*}
 \end{proof}
-In practice, to guard against approximation errors in $5$-step GPU power iteration, diagonal entries of $\boldsymbol{\Sigma}'$ are clamped at $0$ and standard $\epsilon_{\mathrm{reg}} I_D$ Cholesky fallback protects subsequent M-steps. Setting $\Delta = 0.5$ leaves $(1 - 0.5^2) = 75\%$ of top-axis variance within each daughter lobe while separating their centers by $2\Delta\sqrt{\lambda_1} = \sqrt{\lambda_1}$ standard deviations along the principal elongation axis.
+Setting $\Delta = 0.5$ leaves $(1 - 0.5^2) = 75\%$ of top-axis variance within each daughter lobe while separating their centers by $\sqrt{\lambda_1}$ standard deviations along the principal elongation axis.
 
 \subsection{Degrees-of-Freedom Scaling Laws and Cosine Schedule}
 \label{sec:scaling}
 
-Because closed-form auto-tuning requires zero per-dataset validation sweeps, \egmm{} computes a complete training recipe prior to Step~1 using only $(N, K, D)$ and covariance structure:
+To operate zero-shot without per-dataset validation grids, \egmm{} resolves its hyperparameters from $(N, K, D)$ and covariance geometry:
 
 \begin{itemize}[leftmargin=*,nosep]
-  \item \textbf{Batch size and epoch budget:} For full covariances, $b_{\min} = \min(N, \max(256, 16K))$ (relaxed to $\min(b_{\min}, \max(128, \lfloor N/5 \rfloor))$ for $N < 3000$), target batch size $b_{\mathrm{tgt}} = \max(b_{\min}, \min(N, 8192, \max(b_{\mathrm{floor}}, \lfloor N/9 \rfloor)))$ where $b_{\mathrm{floor}} = 128$ ($N < 3000$) or $256$, $S_{\mathrm{ep}} = \max(1, \lfloor N / b_{\mathrm{tgt}} \rfloor)$, and exact partition $B = \lfloor N / S_{\mathrm{ep}} \rfloor$. Epoch count $E$ scales smoothly across dataset size: $E \in [4, 7]$ ($\lceil 30 / S_{\mathrm{ep}} \rceil$) for $N < 15{,}000$, $E = 4$ for $15{,}000 \le N < 100{,}000$, and $E = 2$ for $N \ge 100{,}000$. Diagonal covariances permit larger batches ($\le 16{,}384$) and $E \in [2, 5]$.
-  \item \textbf{Degrees-of-freedom adaptation:} Let $\mathrm{eff\_df} = B / \max(1, DK)$ measure the average samples per component covariance parameter row, and define smooth interpolation factor $t_{\mathrm{df}} = \clip\bigl((\mathrm{eff\_df} - 1.5)/1.5,\, 0,\, 1\bigr)$. We set:
+  \item \textbf{Batch size and epoch budget:} For full covariances, $b_{\min} = \min(N, \max(256, 16K))$ (relaxed to $\min(b_{\min}, \max(128, \lfloor N/5 \rfloor))$ for $N < 3000$), target batch size $b_{\mathrm{tgt}} = \max(b_{\min}, \min(N, 8192, \max(b_{\mathrm{floor}}, \lfloor N/9 \rfloor)))$ where $b_{\mathrm{floor}} = 128$ ($N < 3000$) or $256$, $S_{\mathrm{ep}} = \max(1, \lfloor N / b_{\mathrm{tgt}} \rfloor)$, and exact partition $B = \lfloor N / S_{\mathrm{ep}} \rfloor$. Epoch count $E$ scales across dataset size: $E \in [4, 7]$ ($\lceil 30 / S_{\mathrm{ep}} \rceil$) for $N < 15{,}000$, $E = 4$ for $15{,}000 \le N < 100{,}000$, and $E = 2$ for $N \ge 100{,}000$. Diagonal covariances use larger batches ($\le 16{,}384$) and $E \in [2, 5]$. When sampling epoch batches of size $S_{\mathrm{ep}} \times B$, the permutation prefix of length $S_{\mathrm{ep}} B$ is drawn without duplicating remainder samples, ensuring every mini-batch is an unbiased draw from $\tilde{\mathbf{X}}$.
+  \item \textbf{Degrees-of-freedom adaptation:} Let $\gamma_{\mathrm{df}} = B / \max(1, D K)$ in full mode and $\gamma_{\mathrm{df,diag}} = B / \max(1, K\sqrt{D})$ in diagonal mode. Defining smooth interpolation factors $t_{\mathrm{df}} = \clip\bigl((\gamma_{\mathrm{df}} - 1.5)/1.5,\, 0,\, 1\bigr)$ and $t_{\mathrm{df,diag}} = \clip\bigl((\gamma_{\mathrm{df,diag}} - 1.0)/3.0,\, 0,\, 1\bigr)$, we set in full mode:
   \begin{align}
   s_{\mathrm{init}} &= 1.0 - 0.75\, t_{\mathrm{df}}, \label{eq:init_scale}\\
   \alpha_0 &= \clip\!\left((0.36 + 0.56\, t_{\mathrm{df}}) T_{\mathrm{steps}}^{-0.04},\, 0.32,\, 0.85\right), \label{eq:alpha0}\\
   \alpha_{\min} &= (0.10 - 0.05\, t_{\mathrm{df}})\,\alpha_0, \label{eq:alphamin}
   \end{align}
-  where $T_{\mathrm{steps}} = E \cdot S_{\mathrm{ep}}$. Crucially, initial sufficient statistics $(M_0, \mathbf{S}_0, \mathbf{Q}_0)$ computed from a fast $5$-iteration $k$-means++~\citep{arthur2007kmeanspp} Voronoi seed ($n_{\mathrm{seed}} = \min(N, \max(2048, 32K))$) are downweighted by $s_{\mathrm{init}} \in [0.25, 1.0]$ before step $0$. On low-$\mathrm{eff\_df}$ problems ($t_{\mathrm{df}} \approx 0$), preserving $s_{\mathrm{init}} = 1.0$ and moderate $\alpha_0 \approx 0.32$--$0.36$ prevents rank-deficient covariance blowup; on well-conditioned problems ($t_{\mathrm{df}} = 1$), shrinking initial seeding influence ($s_{\mathrm{init}} = 0.25$) and taking aggressive early steps ($\alpha_0 \approx 0.8$ annealed via cosine decay $\alpha_t = \alpha_{\min} + \frac{\alpha_0 - \alpha_{\min}}{2}(1 + \cos(\pi t / (T_{\mathrm{steps}}-1)))$) rapidly escapes seeding bias while converging smoothly.
-  \item \textbf{Medium-scale full-batch polish:} When $N \le 100{,}000$, \egmm{} follows the stochastic EMA phase with brief exact full-batch EM refinement ($\alpha = 1$, $6$ steps for $N \le 25\text{k}$, $5$ steps for $25\text{k} < N \le 100\text{k}$ in full mode; up to $12$ steps checked every $3$ steps for early convergence $\Delta \ell < \mathrm{tol}$ in diagonal mode). At $N > 100{,}000$, pure EMA completes without full-batch sweeps for maximum throughput.
+  and in diagonal mode $s_{\mathrm{init}} = 1.0 - 0.50\, t_{\mathrm{df,diag}}$, $\alpha_0 = \clip\bigl((0.44 + 0.24\, t_{\mathrm{df,diag}}) T_{\mathrm{steps}}^{-0.03}, 0.38, 0.68\bigr)$, $\alpha_{\min} = 0.12\,\alpha_0$, where $T_{\mathrm{steps}} = E \cdot S_{\mathrm{ep}}$. Initial sufficient statistics $(M_0, \mathbf{S}_0, \mathbf{Q}_0)$ computed from a $5$-iteration $k$-means++~\citep{arthur2007kmeanspp} Voronoi seed ($n_{\mathrm{seed}} = \min(N, \max(2048, 32K))$) are downweighted by $s_{\mathrm{init}}$ before step $0$.
+  \item \textbf{Optional medium-scale full-batch polish:} When \texttt{polish\_steps="auto"}, \egmm{} runs $P_{\mathrm{polish}} = 0$ full-batch steps for $N > 100{,}000$, and brief exact full-batch EM refinement ($\alpha = 1$, $6$ steps for $N \le 25\text{k}$, $5$ steps for $25\text{k} < N \le 100\text{k}$ in full mode; up to $12$ steps with early stopping every $3$ steps in diagonal mode) for $N \le 100{,}000$. Users can also set \texttt{polish\_steps=0} explicitly to run pure stochastic EMA across all scales.
 \end{itemize}
 
 \subsection{CUDA Graph Capture and Adaptive CPU/GPU Routing}
 \label{sec:systems}
 
-Two systems optimizations turn algorithmic simplicity into wall-clock speedups:
-
+Two systems optimizations convert algorithmic simplicity into low wall-clock latency:
 \begin{enumerate}[leftmargin=*,nosep]
   \item \textbf{Branchless CUDA Graph inner loop:} In the inner M-step (\texttt{allow\_sync=False}), PyTorch executes \texttt{torch.linalg.cholesky\_ex} in \texttt{float32} without checking \texttt{(info != 0).any()}, replacing any rare non-PD slice branchlessly via \texttt{torch.where} with its clamped positive diagonal square root. Because no host-device synchronization occurs across steps, \egmm{} captures the entire batch gather, centered E-step, EMA moment blend, Cholesky inversion, and pointer increment inside a single \texttt{torch.cuda.CUDAGraph()} (Algorithm~\ref{alg:egmm}), replaying all non-revival steps in microseconds of host overhead.
-  \item \textbf{Adaptive device routing:} When \texttt{device="auto"}, workloads below $N K D < 150{,}000$ (full covariance) or $N K D < 2{,}000{,}000$ with $N < 16{,}384$ (diagonal) execute directly on CPU, eliminating the $\sim$25--37\,ms GPU graph initialization tax on small tabular datasets.
+  \item \textbf{Adaptive device routing:} When \texttt{device="auto"}, workloads below $N K D < 150{,}000$ (full covariance) or $N K D < 2{,}000{,}000$ with $N < 16{,}384$ (diagonal) execute directly on CPU, eliminating the $\sim$10--20\,ms GPU graph capture tax on tiny tabular datasets.
 \end{enumerate}
 
 \begin{algorithm}[t]
@@ -225,18 +241,18 @@ Two systems optimizations turn algorithmic simplicity into wall-clock speedups:
 \STATE Resolve $(B, E, \alpha_0, \alpha_{\min}, s_{\mathrm{init}}, P_{\mathrm{polish}}, \mathcal{R})$ via Section~\ref{sec:scaling}
 \STATE Seed centers via $k$-means++ + $5$ Lloyd steps on $n_{\mathrm{seed}}$ points; compute Voronoi $(M_0, \mathbf{S}_0, \mathbf{Q}_0)$ in \texttt{float64}
 \STATE Scale moments $(M, \mathbf{S}, \mathbf{Q}) \leftarrow s_{\mathrm{init}}(M_0, \mathbf{S}_0, \mathbf{Q}_0)$
-\STATE Pre-project $(\pi, \boldsymbol{\mu}, L^{-1}, \ell)$ in \texttt{float32}; sample $E$ epoch index tensors of size $S_{\mathrm{ep}} \times B$
-\IF{device is CUDA and $T_{\mathrm{steps}} \ge 4$}
+\STATE Pre-project $(\pi, \boldsymbol{\mu}, L^{-1}, \ell)$ in \texttt{float32}; sample $E$ unbiased epoch index tensors of size $S_{\mathrm{ep}} \times B$
+\IF{device is CUDA and $T_{\mathrm{steps}} \ge 4$ and $B K D \le 3.2 \times 10^7$}
   \STATE Capture single EMA EM step into CUDA Graph $\mathcal{G}$ with branchless Cholesky M-step
 \ENDIF
 \FOR{$t = 0, \dots, T_{\mathrm{steps}} - 1$}
-  \STATE Replay $\mathcal{G}$ (or execute eager E-step Prop.~\ref{prop:centered} + EMA Eq.~\eqref{eq:ema_update} + M-step)
+  \STATE Replay $\mathcal{G}$ (or execute eager chunked E-step Prop.~\ref{prop:centered} + EMA Eq.~\eqref{eq:ema_update} + M-step)
   \IF{$t \in \mathcal{R}$}
-    \STATE Revive dead clusters via eigen-split (Eqs.~\eqref{eq:rev_m}--\eqref{eq:rev_cov}); re-project $(\pi, \boldsymbol{\mu}, L^{-1}, \ell)$
+    \STATE Revive dead clusters via Wedderburn eigen-split (Eqs.~\eqref{eq:wedderburn_delta}--\eqref{eq:rev_cov}); re-project $(\pi, \boldsymbol{\mu}, L^{-1}, \ell)$
   \ENDIF
 \ENDFOR
 \FOR{$p = 1, \dots, P_{\mathrm{polish}}$}
-  \STATE Execute exact full-dataset centered E-step and $\alpha = 1$ M-step (with $\mathrm{tol}$ check if diag)
+  \STATE Execute chunked full-dataset centered E-step and $\alpha = 1$ M-step (with $\mathrm{tol}$ check if diag)
 \ENDFOR
 \STATE Sync final \texttt{float64} M-step and inverse-standardize public attributes
 \end{algorithmic}
@@ -245,113 +261,188 @@ Two systems optimizations turn algorithmic simplicity into wall-clock speedups:
 \section{Experimental Protocol}
 \label{sec:protocol}
 
-All experiments were executed on an NVIDIA GeForce RTX 5070 GPU paired with an Intel x86-64 CPU under Windows 11, Python 3.14.7, PyTorch 2.14.1+cu132 (CUDA 13.2), and \texttt{scikit-learn} 1.9.1. To avoid overfitting or timing illusions, we adhere to a strict four-part verification protocol:
+All experiments were executed on an NVIDIA GeForce RTX 5070 GPU paired with an Intel x86-64 CPU under Windows 11, Python 3.14.7, PyTorch 2.14.1+cu132 (CUDA 13.2), and \texttt{scikit-learn} 1.9.1. To avoid overfitting or timing confounds, we enforce a strict five-part verification protocol:
 
-\paragraph{1. Leakage-free evaluation splits.} Every dataset is split into $70\%$ training, $15\%$ validation ($X_{\mathrm{val}}$, used exclusively for inner hyperparameter sweeps of baselines and sensitivity checks), and $15\%$ untouched held-out test ($X_{\mathrm{test}}$), repeated across three seeds ($0, 1, 2$). Fit times wrap \texttt{time.perf\_counter()} around \texttt{fit(X\_train)} with explicit \texttt{torch.cuda.synchronize()} barriers after one dry warmup call.
+\paragraph{1. Leakage-free evaluation splits and disjoint scaling calibration.} Every benchmark dataset is split into $70\%$ training, $15\%$ validation ($X_{\mathrm{val}}$, used exclusively for inner hyperparameter sweeps of baselines), and $15\%$ untouched held-out test ($X_{\mathrm{test}}$), repeated across three seeds ($0, 1, 2$). Scaling laws in Section~\ref{sec:scaling} were calibrated on 10 purely synthetic mixtures ($N$ from $5\text{k}$ to $350\text{k}$, seeds $90001$--$90010$) with \texttt{polish\_steps=0}, strictly disjoint from all evaluation datasets.
 
-\paragraph{2. Baselines and ablations.} We evaluate six distinct configurations across shared datasets:
+\paragraph{2. Head-to-head baselines and scale-matched CPU reference.} We evaluate seven primary methods across all 33 datasets:
 \begin{itemize}[leftmargin=*,nosep]
   \item \textbf{\egmm{} (Ours):} Zero-tuning closed-form recipe with \texttt{float32} E-step / \texttt{float64} moments.
   \item \textbf{\texttt{TorchBatchGMM}:} Exact full-batch EM (\texttt{max\_iter=50}, \texttt{tol=1e-3}) running inside the identical \egmm{} PyTorch/CUDA centered kernel stack and standardized \texttt{float32/float64} precision, isolating purely algorithmic gains over batch EM.
   \item \textbf{\texttt{OnlineGMM\_tuned}:} Capp{\'e}--Moulines~\citep{cappe2009online} online EM ($\gamma_t = (t+2)^{-\rho}$) sharing identical centered kernels, tuned per dataset on $X_{\mathrm{val}}$ over a $9$-point grid $\rho \in \{0.55, 0.70, 0.85\} \times B \in [512, 8192]$ ($3$ epochs for $N \ge 30\text{k}$, $6$ otherwise).
-  \item \textbf{\texttt{NaiveMinibatchGMM}:} Fixed $\alpha = 0.15$ stochastic EMA ablation without cosine decay, scaling law, or dead revival.
+  \item \textbf{\texttt{NaiveMinibatchGMM}:} Fixed $\alpha = 0.15$ stochastic EMA without cosine decay, scaling law, or dead revival.
   \item \textbf{\texttt{EMeansInitGMM}:} Two epochs of cosine-annealed mini-batch EMA $k$-means (\texttt{alpha\_0=0.3}, batch $\le 8192$) followed by $10$ full-batch EM refinement iterations (\texttt{TorchBatchGMM}), testing whether \emeans{} warm-starting alone suffices.
-  \item \textbf{\texttt{SklearnGMM}:} CPU \texttt{float64} reference~\citep{pedregosa2011scikit} (\texttt{max\_iter=50}, \texttt{tol=1e-3}, \texttt{reg\_covar=1e-6}; capped at \texttt{max\_iter=15} on seed 0 only for \texttt{covtype\_581k} due to $128.5\text{\,s}$ single-run CPU cost). Note an important modeling difference: \texttt{SklearnGMM} applies \texttt{reg\_covar=1e-6} directly in raw feature units rather than standardized units, creating dataset-dependent divergence on multi-scale tabular data (analyzed in Section~\ref{sec:limitations}).
+  \item \textbf{\texttt{StandardizedSklearnGMM}:} Scale-matched CPU \texttt{float64} reference wrapping \texttt{StandardScaler} + \texttt{GaussianMixture} (\texttt{max\_iter=50}, \texttt{tol=1e-3}, \texttt{reg\_covar=1e-6}) with exact log-Jacobian adjustment $J = -\sum_{j=1}^D \log \hat{\sigma}_j$, eliminating raw-vs-standardized regularization confounds across all 33 datasets and all 3 seeds.
+  \item \textbf{\texttt{SklearnGMM} (Raw):} Unstandardized CPU \texttt{float64} \texttt{GaussianMixture} across all 33 datasets and all 3 seeds.
 \end{itemize}
 
-\paragraph{3. Primary and external benchmarks.}
-Our primary suite contains \textbf{23 datasets} spanning small ($N_{\mathrm{train}} < 5\text{k}$), medium ($7\text{k}$--$50\text{k}$), and large ($90\text{k}$--$406\text{k}$) tabular and PCA-projected image problems ($D \in [7, 128]$, $K \in [7, 64]$): 17 real OpenML/UCI benchmarks~\citep{blackard1999covertype,lecun1998mnist,xiao2017fashion,roe2005miniboone} and 6 challenging synthetic stress mixtures (anisotropic, overlapping, high-$K=64$, imbalanced, high-$D=128$, and large-scale). To test zero-shot small-$N$ generalization independently, we additionally evaluate \textbf{16 unseen small UCI/OpenML datasets} ($N_{\mathrm{train}} \in [105, 3831]$) without changing any \egmm{} constant.
+\paragraph{3. Controlled fairness ablations.} To isolate every mechanism and remove any confound between stochastic EMA and closing polish, we evaluate four additional ablation variants across all 33 datasets: \texttt{EGMM\_polish0} (\texttt{polish\_steps=0} everywhere), \texttt{EGMM\_no\_init\_scale} ($s_{\mathrm{init}}=1.0$ fixed), \texttt{EGMM\_no\_revival} (\texttt{revive\_dead=False}), and \texttt{OnlineGMM\_matched\_polish} (granting \texttt{OnlineGMM\_tuned} the exact same \texttt{polish\_steps="auto"} and \texttt{init\_usage\_scale="auto"} schedule as \egmm{}).
 
-\paragraph{4. Statistical tests and Pareto sweeps.} Paired performance across all $N$ datasets is assessed using two-sided Wilcoxon signed-rank tests~\citep{demsar2006statistical} and overall ranking via the Friedman $\chi^2_F$ test with Nemenyi Critical Difference ($\mathrm{CD}_{0.05}$). Speed-vs-quality dominance is further measured across compute budgets ($E \in \{1,2,3,5,8,12\}$ epochs vs.\ batch iterations $\{2,5,10,20,40,80\}$) on six large/hard datasets.
+\paragraph{4. Expanded 33-dataset primary suite + 16 unseen small datasets.}
+Our primary suite contains \textbf{33 datasets} spanning small ($N_{\mathrm{train}} < 5\text{k}$), medium ($7\text{k}$--$98\text{k}$), and large ($140\text{k}$--$406.7\text{k}$) tabular and image problems ($D \in [3, 561]$, $K \in [7, 64]$, 25 full-covariance and 8 diagonal-covariance): 25 real OpenML/UCI benchmarks~\citep{blackard1999covertype,lecun1998mnist,xiao2017fashion,roe2005miniboone} (including medium/large additions \texttt{jannis}, \texttt{numerai28.6}, \texttt{higgs\_98k}, \texttt{philippine}, \texttt{gas\_drift}, \texttt{har}, \texttt{skin\_nonskin}, and \texttt{creditcard}) and 8 synthetic stress mixtures (including \texttt{syn\_scale300k\_k64\_full} and \texttt{syn\_scale400k\_d256\_diag}). Notably, \textbf{7 large-scale datasets} have $N_{\mathrm{train}} > 100{,}000$, where \egmm{} runs with \texttt{polish\_steps=0} by default. We also evaluate \textbf{16 unseen small datasets} ($N_{\mathrm{train}} \in [105, 3831]$).
 
 \section{Results and Analysis}
 \label{sec:results}
 
-\subsection{Head-to-Head Quality and Speed Across 23 Datasets}
+\subsection{Head-to-Head Quality, Speed, and Large-Scale Zero-Polish Dominance}
 
 \begin{table}[t]
 \centering
-\caption{Pairwise Wilcoxon signed-rank comparisons of \egmm{} against five baselines across the 23 primary datasets (3-seed means; W/T/L denotes wins/ties/losses within $10^{-3}$ NLL; $\Delta\mathrm{NLL} < 0$ and Speedup $> 1\times$ favor \egmm{}).}
+\caption{Pairwise Wilcoxon signed-rank comparisons of \egmm{} across (top) all 33 primary datasets, (middle) the 7 large-scale zero-polish datasets ($N_{\mathrm{train}} > 10^5$, \texttt{polish\_steps=0}), and (bottom) component \& fairness ablations across all 33 datasets ($\Delta\mathrm{NLL} < 0$ and Speedup $> 1\times$ favor the first method).}
 \label{tab:wilcoxon_main}
 \scriptsize
-\setlength{\tabcolsep}{3.5pt}
+\setlength{\tabcolsep}{3.0pt}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccccc}
 \toprule
-\textbf{Baseline} & \textbf{W/T/L} & \textbf{Med.\ $\Delta$NLL} & \textbf{$p_{\mathrm{NLL}}$} & \textbf{Med.\ Spd} & \textbf{$p_{\mathrm{time}}$} \\
+\textbf{Comparison} & \textbf{W/T/L} & \textbf{Med.\ $\Delta$NLL} & \textbf{$p_{\mathrm{NLL}}$} & \textbf{Med.\ Spd} & \textbf{$p_{\mathrm{time}}$} \\
 \midrule
-\texttt{TorchBatchGMM}     & \textbf{19/0/4} & $-0.3691$ & $2.15\times 10^{-4}$ & \textbf{2.33$\times$} & $2.38\times 10^{-7}$ \\
-\texttt{OnlineGMM\_tuned}  & \textbf{19/1/3} & $-0.3470$ & $7.32\times 10^{-5}$ & $0.77\times$ & $2.14\times 10^{-2}$ \\
-\texttt{NaiveMinibatchGMM} & \textbf{22/0/1} & $-1.0595$ & $7.87\times 10^{-6}$ & $0.66\times$ & $1.67\times 10^{-6}$ \\
-\texttt{EMeansInitGMM}     & \textbf{23/0/0} & $-1.4685$ & $2.38\times 10^{-7}$ & \textbf{1.12$\times$} & $3.01\times 10^{-2}$ \\
-\texttt{SklearnGMM} (CPU)  & $11/0/12$       & $+0.0102$ & $0.9643$             & \textbf{56.07$\times$}& $2.38\times 10^{-7}$ \\
+\multicolumn{6}{l}{\emph{A. All 33 Primary Datasets (3-seed means; Friedman $\chi^2_F = 80.92, p = 2.30 \times 10^{-15}$)}} \\
+\egmm{} vs \texttt{TorchBatchGMM}        & \textbf{26/0/7} & $-0.4288$ & $6.36\times 10^{-6}$ & \textbf{2.68$\times$} & $3.45\times 10^{-7}$ \\
+\egmm{} vs \texttt{OnlineGMM\_tuned}     & \textbf{28/0/5} & $-0.9848$ & $2.11\times 10^{-7}$ & $0.66\times$          & $1.93\times 10^{-2}$ \\
+\egmm{} vs \texttt{NaiveMinibatchGMM}    & \textbf{32/0/1} & $-1.5624$ & $7.68\times 10^{-9}$ & $0.60\times$          & $4.37\times 10^{-4}$ \\
+\egmm{} vs \texttt{EMeansInitGMM}        & \textbf{32/0/1} & $-1.4988$ & $1.63\times 10^{-8}$ & \textbf{1.15$\times$} & $2.58\times 10^{-3}$ \\
+\egmm{} vs \texttt{StdSklearnGMM} (CPU)  & \textbf{17/0/16}& $-0.0366$ & $0.3127$             & \textbf{48.21$\times$}& $2.33\times 10^{-10}$ \\
+\egmm{} vs \texttt{SklearnGMM} (Raw CPU) & $14/0/19$       & $+0.0378$ & $0.8599$             & \textbf{57.86$\times$}& $2.33\times 10^{-10}$ \\
+\midrule
+\multicolumn{6}{l}{\emph{B. Large-Scale Zero-Polish Subset ($N_{\mathrm{train}} > 100\text{k}, n = 7$; \texttt{polish\_steps = 0})}} \\
+\egmm{} vs \texttt{TorchBatchGMM}        & \textbf{6/0/1}  & $-1.0330$ & $3.12\times 10^{-2}$ & \textbf{3.93$\times$} & $1.09\times 10^{-1}$ \\
+\egmm{} vs \texttt{OnlineGMM\_tuned}     & \textbf{6/0/1}  & $-1.5134$ & $3.12\times 10^{-2}$ & \textbf{1.06$\times$} & $4.69\times 10^{-1}$ \\
+\egmm{} vs \texttt{NaiveMinibatchGMM}    & \textbf{7/0/0}  & $-1.5624$ & $1.56\times 10^{-2}$ & $0.96\times$          & $1.00\times 10^{0}$ \\
+\egmm{} vs \texttt{EMeansInitGMM}        & \textbf{6/0/1}  & $-1.1368$ & $3.12\times 10^{-2}$ & \textbf{3.02$\times$} & $3.12\times 10^{-2}$ \\
+\egmm{} vs \texttt{StdSklearnGMM} (CPU)  & $2/0/5$         & $+0.7294$ & $5.78\times 10^{-1}$ & \textbf{161.55$\times$}& $1.56\times 10^{-2}$ \\
+\midrule
+\multicolumn{6}{l}{\emph{C. Component \& Fairness Ablations Across All 33 Datasets}} \\
+\egmm{} vs \texttt{EGMM\_no\_revival}        & \textbf{26/4/3} & $-0.5132$ & $7.58\times 10^{-6}$ & $0.89\times$          & $6.55\times 10^{-4}$ \\
+\egmm{} vs \texttt{OnlineGMM\_matched\_pol}  & \textbf{26/0/7} & $-0.5962$ & $2.30\times 10^{-6}$ & \textbf{1.22$\times$} & $1.97\times 10^{-4}$ \\
+\egmm{} vs \texttt{EGMM\_polish0}            & \textbf{21/7/5} & $-0.0493$ & $4.40\times 10^{-4}$ & $0.68\times$          & $3.14\times 10^{-5}$ \\
+\egmm{} vs \texttt{EGMM\_no\_init\_scale}    & \textbf{17/3/13}& $-0.0044$ & $3.67\times 10^{-1}$ & $1.00\times$          & $6.75\times 10^{-1}$ \\
+\texttt{EGMM\_polish0} vs \texttt{TorchBatch}& \textbf{21/0/12}& $-0.2591$ & $4.91\times 10^{-2}$ & \textbf{2.30$\times$} & $5.39\times 10^{-7}$ \\
+\texttt{EGMM\_polish0} vs \texttt{OnlineGMM} & \textbf{25/0/8} & $-0.5313$ & $3.73\times 10^{-4}$ & $1.03\times$          & $9.30\times 10^{-1}$ \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-Table~\ref{tab:wilcoxon_main} summarizes paired tests across all 23 datasets, while Table~\ref{tab:full_23} details per-dataset results. Against \texttt{TorchBatchGMM} sharing the exact same GPU/CPU tensor engine and floating-point precision, \egmm{} wins on \textbf{19/23 datasets in test NLL} ($p = 2.15 \times 10^{-4}$) and \textbf{23/23 datasets in wall-clock speed} (median $2.33\times$, maximum $6.72\times$ on \texttt{miniboone}, $5.89\times$ on \texttt{covtype\_581k}, and $5.66\times$ on \texttt{syn\_scale500k\_diag}, $p = 2.38 \times 10^{-7}$). Against \texttt{OnlineGMM\_tuned} despite granting the baseline a $9$-config validation sweep per dataset, \egmm{} still achieves superior NLL on \textbf{19/23 datasets} ($p = 7.32 \times 10^{-5}$). Against ablations \texttt{NaiveMinibatchGMM} and \texttt{EMeansInitGMM}, \egmm{} wins \textbf{22/23} and \textbf{23/23} ($p \le 7.87 \times 10^{-6}$), confirming that cosine scaling, degrees-of-freedom conditioning, revival, and polishing are all essential. Against CPU \texttt{float64} \texttt{SklearnGMM}, \egmm{} achieves statistically indistinguishable NLL ($p = 0.964$, W/T/L $11/0/12$) at \textbf{56.07$\times$} median speedup and up to \textbf{560.91$\times$} speedup on \texttt{covtype\_581k} ($229.1\text{\,ms}$ vs.\ $128.49\text{\,s}$).
+Table~\ref{tab:wilcoxon_main} summarizes paired non-parametric tests across all 33 datasets, while Table~\ref{tab:full_33} reports complete per-dataset metrics.
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \textbf{Overall 33-dataset dominance (Panel A):} Against \texttt{TorchBatchGMM} sharing the exact same GPU/CPU kernel stack and mixed-precision arithmetic, \egmm{} wins on \textbf{26/33 datasets in test NLL} ($\text{med}\,\Delta\mathrm{NLL} = -0.4288$, $p = 6.36 \times 10^{-6}$) and \textbf{30/33 datasets in wall-clock speed} (median $2.68\times$, up to $8.26\times$ on \texttt{skin\_nonskin}, $7.58\times$ on \texttt{creditcard}, and $5.22\times$ on \texttt{covtype\_581k}, $p = 3.45 \times 10^{-7}$). Against validation-tuned \texttt{OnlineGMM\_tuned}, \egmm{} wins \textbf{28/33 datasets} ($\text{med}\,\Delta\mathrm{NLL} = -0.9848$, $p = 2.11 \times 10^{-7}$). Against scale-matched CPU \texttt{StandardizedSklearnGMM}, \egmm{} wins \textbf{17/33 datasets} ($\text{med}\,\Delta\mathrm{NLL} = -0.0366$, $p = 0.313$) while running \textbf{48.21$\times$ faster} at the median (and up to $489.9\times$ faster on \texttt{syn\_scale300k\_k64\_full}).
+  \item \textbf{Large-scale zero-polish regime (Panel B, $N_{\mathrm{train}} > 10^5$):} On the 7 largest datasets (\texttt{covtype\_581k}, \texttt{creditcard}, \texttt{skin\_nonskin}, \texttt{syn\_scale200k}, \texttt{syn\_scale300k\_k64\_full}, \texttt{syn\_scale400k\_d256\_diag}, \texttt{syn\_scale500k\_diag}), \egmm{} executes \textbf{zero full-batch polish steps} (\texttt{polish\_steps=0}). Even without polish, pure stochastic EMA + Wedderburn revival beats \texttt{TorchBatchGMM} on \textbf{6/7 datasets} ($\text{med}\,\Delta\mathrm{NLL} = -1.0330$) at \textbf{3.93$\times$ median speedup}, beats \texttt{OnlineGMM\_tuned} on \textbf{6/7 datasets} ($\text{med}\,\Delta\mathrm{NLL} = -1.5134$) while also running faster ($1.06\times$), and achieves a \textbf{161.55$\times$ median speedup} over \texttt{StandardizedSklearnGMM}.
+  \item \textbf{Fairness ablations isolating polish, revival, and initialization scale (Panel C):} When we strip closing polish from \egmm{} across all 33 datasets (\texttt{EGMM\_polish0}), it \emph{still} beats \texttt{TorchBatchGMM} on \textbf{21/33 datasets} ($\text{med}\,\Delta\mathrm{NLL} = -0.2591$, $p = 0.0491$, $2.30\times$ speedup) and beats \texttt{OnlineGMM\_tuned} on \textbf{25/33 datasets} ($p = 3.73 \times 10^{-4}$). Conversely, when we grant \texttt{OnlineGMM\_tuned} the exact same closing polish and initial moment scaling as \egmm{} (\texttt{OnlineGMM\_matched\_polish}), \egmm{} beats it on \textbf{26/33 datasets} ($\text{med}\,\Delta\mathrm{NLL} = -0.5962$, $p = 2.30 \times 10^{-6}$) while running $1.22\times$ faster, proving that \egmm{}'s cosine EMA schedule and Wedderburn revival---not closing polish---drive the primary quality improvement. Removing Wedderburn revival (\texttt{EGMM\_no\_revival}) degrades NLL on \textbf{26/30 non-tied datasets} ($\text{med}\,\Delta\mathrm{NLL} = -0.5132$, $p = 7.58 \times 10^{-6}$) and increases mean dead components by $90\times$ (from $0.05$ to $4.49$). While $s_{\mathrm{init}}$ shows a modest aggregate median shift across all 33 datasets ($-0.0044$), on high-$K$ low-$\gamma_{\mathrm{df}}$ regimes such as \texttt{syn\_highk64\_60k} ($\gamma_{\mathrm{df}} \approx 4.0$) and \texttt{syn\_scale300k\_k64\_full}, adaptive $s_{\mathrm{init}}$ prevents early rank-deficient covariance spikes during the first two mini-batches.
+\end{enumerate}
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=\linewidth]{fig_cd_ranks.png}
-  \caption{Mean held-out test NLL ranks across all 23 datasets (Friedman $\chi^2_F = 41.96, p = 6.01 \times 10^{-8}$, Nemenyi $\mathrm{CD}_{0.05} = 1.57$). \egmm{} ranks strictly first ($1.913$), outperforming all baselines and sitting significantly ahead of \texttt{EMeansInitGMM} and \texttt{NaiveMinibatchGMM} beyond the all-pairs Nemenyi threshold ($3.49$).}
+  \caption{Mean held-out test NLL ranks across all 33 datasets (Friedman $\chi^2_F = 80.92, p = 2.30 \times 10^{-15}$, Nemenyi $\mathrm{CD}_{0.05} = 1.57$). \egmm{} ranks strictly first ($2.485$), ahead of \texttt{StandardizedSklearnGMM} ($2.576$) and \texttt{SklearnGMM} ($3.030$), and statistically superior to \texttt{OnlineGMM\_tuned} ($4.485$), \texttt{EMeansInitGMM} ($5.394$), and \texttt{NaiveMinibatchGMM} ($6.000$).}
   \label{fig:cd_ranks}
 \end{figure}
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
-  \includegraphics[width=\linewidth]{fig_speedup_vs_nll.png}
-  \caption{Speedup vs.\ held-out test $\Delta\mathrm{NLL}$ relative to GPU \texttt{TorchBatchGMM} across 23 datasets (3-seed means). Every point lies to the right of $1\times$ ($23/23$ faster), and $19/23$ points occupy the shaded lower-right strictly-dominating quadrant.}
+  \includegraphics[width=0.92\textwidth]{fig_speedup_vs_nll.png}
+  \caption{Wall-clock speedup vs.\ held-out test $\Delta\mathrm{NLL}$ relative to GPU \texttt{TorchBatchGMM} across all 33 primary benchmark datasets (3-seed means; symlog vertical axis with linear region $[-1.5, 1.5]$). \egmm{} accelerates training on $30/33$ datasets (up to $8.26\times$) and improves held-out test NLL on $26/33$ datasets.}
   \label{fig:speedup_scatter}
-\end{figure}
-
-Figure~\ref{fig:cd_ranks} displays the Friedman/Nemenyi rank ordering across all six algorithms ($\chi^2_F = 41.957, p = 6.01 \times 10^{-8}$): \egmm{} secures the lowest mean rank ($1.913$), ahead of \texttt{SklearnGMM} ($2.826$), \texttt{TorchBatchGMM} ($3.261$), \texttt{OnlineGMM\_tuned} ($3.435$), \texttt{EMeansInitGMM} ($4.609$), and \texttt{NaiveMinibatchGMM} ($4.957$). Figure~\ref{fig:speedup_scatter} maps each dataset's speedup--NLL trade-off against \texttt{TorchBatchGMM}, visually highlighting the $19/23$ strictly-dominating points.
+\end{figure*}
 
 \begin{table*}[t]
 \centering
-\caption{Complete 3-seed mean held-out Test NLL ($\downarrow$) and Fit Time in milliseconds ($\downarrow$) across all 23 primary benchmark datasets. Bold denotes the best value among all methods on each row; \texttt{covtype\_581k} \texttt{SklearnGMM} reflects seed 0 capped at $15$ iterations ($128{,}488\text{\,ms}$).}
-\label{tab:full_23}
+\caption{Complete 3-seed mean held-out Test NLL ($\downarrow$) and Fit Time in milliseconds ($\downarrow$) across all 33 primary benchmark datasets. Bold denotes the best value among all methods on each row; \texttt{EGMM\_pol0} denotes pure stochastic \egmm{} with \texttt{polish\_steps=0} (identical to \egmm{} on all 7 datasets with $N_{\mathrm{train}} > 100\text{k}$).}
+\label{tab:full_33}
 \scriptsize
-\setlength{\tabcolsep}{3.8pt}
+\setlength{\tabcolsep}{2.8pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lcccccccccc}
+\begin{tabular}{lcccccccccccc}
 \toprule
-\textbf{Dataset ($N_{\mathrm{train}}, D, K$, cov)} & \multicolumn{4}{c}{\textbf{Held-Out Test NLL ($\downarrow$)}} & \multicolumn{3}{c}{\textbf{Wall-Clock Fit Time (ms, $\downarrow$)}} & \multicolumn{2}{c}{\textbf{Speedup vs.}} & \textbf{Dead (EG/TB)} \\
-\cmidrule(lr){2-5}\cmidrule(lr){6-8}\cmidrule(lr){9-10}
-& \textbf{\egmm{}} & \texttt{TorchBatch} & \texttt{Online} & \texttt{Sklearn} & \textbf{\egmm{}} & \texttt{TorchBatch} & \texttt{Sklearn} & \texttt{TB} & \texttt{SK} & (3-seed mean) \\
+\textbf{Dataset ($N_{\mathrm{train}}, D, K$, cov)} & \multicolumn{6}{c}{\textbf{Held-Out Test NLL ($\downarrow$)}} & \multicolumn{3}{c}{\textbf{Wall-Clock Fit Time (ms, $\downarrow$)}} & \multicolumn{2}{c}{\textbf{Speedup vs.}} & \textbf{Dead (EG/TB)} \\
+\cmidrule(lr){2-7}\cmidrule(lr){8-10}\cmidrule(lr){11-12}
+& \textbf{\egmm{}} & \texttt{EGMM\_pol0} & \texttt{TorchBatch} & \texttt{Online} & \texttt{StdSklearn} & \texttt{Sklearn} & \textbf{\egmm{}} & \texttt{TorchBatch} & \texttt{StdSklearn} & \texttt{TB} & \texttt{StdSK} & (3-seed mean) \\
 \midrule
-\texttt{california\_housing} (14448, 8, 16, full)  & \textbf{16.377} & 16.455 & 16.535 & 16.779 & \textbf{29.0} & 58.9 & 993.8 & 2.03$\times$ & 34.30$\times$ & \textbf{0.00} / 2.00 \\
-\texttt{covtype\_581k} (406708, 54, 32, full)     & \textbf{-303.081} & -296.746 & -296.809 & -196.125 & \textbf{229.1} & 1349.1 & 128487.8 & \textbf{5.89$\times$} & \textbf{560.91$\times$} & \textbf{0.00} / 2.67 \\
-\texttt{digits\_pca32} (1257, 32, 10, full)       & 84.811 & 84.902 & 84.889 & \textbf{83.544} & \textbf{34.6} & 44.7 & 122.9 & 1.29$\times$ & 3.55$\times$ & 0.00 / 0.00 \\
-\texttt{electricity} (31718, 7, 16, full)         & -20.895 & \textbf{-21.216} & -20.514 & -17.083 & \textbf{37.1} & 107.8 & 2553.5 & 2.90$\times$ & 68.78$\times$ & \textbf{0.00} / 2.00 \\
-\texttt{fashion\_mnist\_pca48} (49000, 48, 24, full) & 262.468 & 264.177 & 265.085 & \textbf{262.190} & \textbf{87.8} & 382.1 & 30573.9 & 4.35$\times$ & 348.23$\times$ & \textbf{0.00} / 5.33 \\
-\texttt{letter} (14000, 16, 26, full)             & \textbf{21.204} & 21.634 & 21.207 & 21.835 & \textbf{53.3} & 86.3 & 3744.6 & 1.62$\times$ & 70.21$\times$ & \textbf{0.00} / 0.67 \\
-\texttt{magic04} (13314, 10, 16, full)            & 26.409 & 26.335 & 26.473 & \textbf{26.220} & \textbf{28.9} & 75.6 & 1620.9 & 2.62$\times$ & 56.07$\times$ & \textbf{0.00} / 1.00 \\
-\texttt{miniboone} (91044, 50, 24, diag)          & 46.418 & 46.964 & 46.765 & \textbf{33.265} & \textbf{47.2} & 317.2 & 6165.0 & \textbf{6.72$\times$} & 130.63$\times$ & 0.33 / 0.00 \\
-\texttt{mnist784\_pca48} (49000, 48, 24, full)    & 289.915 & 291.146 & 293.975 & \textbf{289.304} & \textbf{87.2} & 376.5 & 29969.8 & 4.32$\times$ & 343.73$\times$ & \textbf{0.00} / 5.00 \\
-\texttt{optdigits} (3934, 32, 10, full)           & 80.544 & 80.126 & 80.702 & \textbf{79.463} & \textbf{36.0} & 84.0 & 281.4 & 2.33$\times$ & 7.81$\times$ & 0.00 / 0.00 \\
-\texttt{pendigits} (7694, 16, 16, full)           & 53.241 & 53.924 & 54.792 & \textbf{51.746} & \textbf{49.2} & 125.6 & 628.1 & 2.55$\times$ & 12.76$\times$ & \textbf{0.00} / 0.33 \\
-\texttt{satimage} (4501, 36, 12, full)            & -5.833 & -5.631 & \textbf{-5.881} & -5.602 & \textbf{42.4} & 102.1 & 746.8 & 2.41$\times$ & 17.60$\times$ & 0.00 / 0.00 \\
-\texttt{segment} (1617, 17, 7, full)              & -3.059 & -0.311 & 0.070 & \textbf{-3.077} & \textbf{38.5} & 43.5 & 82.9 & 1.13$\times$ & 2.16$\times$ & \textbf{0.00} / 1.33 \\
-\texttt{shuttle} (40600, 9, 16, full)             & \textbf{16.508} & 16.736 & 17.495 & 19.843 & \textbf{36.7} & 105.6 & 2569.6 & 2.87$\times$ & 69.94$\times$ & \textbf{0.33} / 2.67 \\
-\texttt{spambase} (3220, 57, 12, diag)            & \textbf{-105.066} & -102.480 & -97.895 & -63.411 & \textbf{41.4} & 81.8 & 202.0 & 1.98$\times$ & 4.88$\times$ & 0.33 / 0.33 \\
-\texttt{syn\_anisotropic\_30k} (21000, 24, 16, full) & \textbf{38.069} & 39.007 & 39.145 & 38.551 & \textbf{56.3} & 75.5 & 1386.5 & 1.34$\times$ & 24.61$\times$ & \textbf{0.00} / 0.33 \\
-\texttt{syn\_highdim128\_50k} (35000, 128, 24, diag) & 192.413 & 192.412 & 192.409 & \textbf{187.132} & \textbf{47.1} & 48.7 & 684.7 & 1.03$\times$ & 14.54$\times$ & 0.33 / 0.33 \\
-\texttt{syn\_highk64\_60k} (42000, 16, 64, full)  & \textbf{26.960} & 27.329 & 27.442 & 27.078 & \textbf{131.4} & 139.7 & 10709.7 & 1.06$\times$ & 81.49$\times$ & \textbf{0.00} / 9.67 \\
-\texttt{syn\_imbalanced\_40k} (28000, 16, 24, full) & 25.175 & 25.263 & 25.255 & \textbf{25.165} & \textbf{79.7} & 85.9 & 2303.5 & 1.08$\times$ & 28.91$\times$ & \textbf{0.00} / 1.33 \\
-\texttt{syn\_overlapping\_30k} (21000, 32, 20, full) & \textbf{49.455} & 49.743 & 49.622 & 49.974 & \textbf{53.2} & 137.5 & 6540.5 & 2.59$\times$ & 123.04$\times$ & 0.00 / 0.00 \\
-\texttt{syn\_scale200k} (140000, 32, 32, full)    & 50.166 & 51.596 & 51.659 & \textbf{49.510} & \textbf{154.1} & 154.5 & 13298.8 & 1.00$\times$ & 86.30$\times$ & \textbf{0.00} / 7.33 \\
-\texttt{syn\_scale500k\_diag} (350000, 48, 32, diag) & 73.284 & 73.460 & 73.284 & \textbf{72.751} & \textbf{48.5} & 274.4 & 4739.2 & \textbf{5.66$\times$} & 97.70$\times$ & 1.00 / 0.67 \\
-\texttt{waveform5000} (3500, 40, 12, full)        & 59.981 & 60.935 & \textbf{59.681} & 60.855 & \textbf{41.8} & 88.0 & 999.0 & 2.10$\times$ & 23.89$\times$ & 0.00 / 0.00 \\
+\texttt{california\_housing} (14448, 8, 16, full) & \textbf{16.378} & 16.412 & 16.455 & 16.505 & 16.414 & 16.779 & \textbf{46.7} & 111.1 & 1443.4 & 2.38$\times$ & 30.9$\times$ & 0.00 / 2.00 \\
+\texttt{covtype\_581k} (406708, 54, 32, full) & \textbf{-302.696} & \textbf{-302.696} & -296.746 & -296.839 & -298.119 & -196.615 & \textbf{283.4} & 1478.9 & 62572.9 & 5.22$\times$ & 220.8$\times$ & 0.00 / 2.67 \\
+\texttt{creditcard} (199364, 29, 24, full) & \textbf{-38.055} & \textbf{-38.055} & -37.724 & -35.722 & -35.011 & -31.191 & \textbf{135.9} & 1030.5 & 31776.7 & 7.58$\times$ & 233.8$\times$ & 0.00 / 6.33 \\
+\texttt{digits\_pca32} (1257, 32, 10, full) & 84.811 & 84.794 & 84.902 & 84.857 & 87.405 & \textbf{83.544} & \textbf{37.4} & 59.3 & 274.8 & 1.59$\times$ & 7.3$\times$ & 0.00 / 0.00 \\
+\texttt{electricity} (31718, 7, 16, full) & -20.910 & -20.738 & -21.216 & -20.532 & \textbf{-21.271} & -17.083 & \textbf{48.1} & 179.3 & 5858.1 & 3.72$\times$ & 121.7$\times$ & 0.00 / 2.00 \\
+\texttt{fashion\_mnist\_pca48} (49000, 48, 24, full) & 262.933 & 263.204 & 264.843 & 266.465 & 262.844 & \textbf{262.758} & \textbf{126.1} & 341.9 & 29798.0 & 2.71$\times$ & 236.3$\times$ & 0.00 / 5.67 \\
+\texttt{gas\_drift} (9737, 128, 16, diag) & 387.658 & 391.866 & 387.494 & 393.532 & 393.217 & \textbf{382.818} & \textbf{51.2} & 81.0 & 836.2 & 1.58$\times$ & 16.3$\times$ & 0.00 / 1.00 \\
+\texttt{har} (7209, 561, 16, diag) & \textbf{-1120.506} & -1107.305 & -1114.237 & -1110.072 & -1116.455 & -1033.489 & \textbf{41.1} & 119.2 & 1410.8 & 2.90$\times$ & 34.3$\times$ & 0.00 / 0.67 \\
+\texttt{higgs\_98k} (68634, 28, 24, full) & 5.690 & 6.498 & 7.952 & 8.297 & 7.954 & \textbf{5.652} & \textbf{91.8} & 382.2 & 24839.0 & 4.16$\times$ & 270.6$\times$ & 0.67 / 8.00 \\
+\texttt{jannis} (58613, 54, 24, full) & 93.614 & 93.817 & 94.576 & 95.675 & \textbf{93.583} & 93.707 & \textbf{117.8} & 540.1 & 55432.7 & 4.58$\times$ & 470.4$\times$ & 0.00 / 7.00 \\
+\texttt{letter} (14000, 16, 26, full) & 21.205 & 21.606 & 21.634 & 21.166 & \textbf{21.067} & 21.835 & \textbf{56.6} & 117.5 & 5830.2 & 2.08$\times$ & 103.1$\times$ & 0.00 / 0.67 \\
+\texttt{magic04} (13314, 10, 16, full) & 26.412 & 26.452 & 26.335 & 26.473 & 26.278 & \textbf{26.220} & \textbf{46.9} & 137.3 & 2613.3 & 2.93$\times$ & 55.7$\times$ & 0.00 / 1.00 \\
+\texttt{miniboone} (91044, 50, 24, diag) & 46.230 & 48.108 & 47.216 & 46.957 & 45.926 & \textbf{32.951} & \textbf{93.0} & 353.3 & 4028.1 & 3.80$\times$ & 43.3$\times$ & 0.00 / 0.33 \\
+\texttt{mnist784\_pca48} (49000, 48, 24, full) & 290.349 & 290.518 & 291.882 & 293.358 & \textbf{290.020} & 290.087 & \textbf{173.9} & 362.8 & 30012.9 & 2.09$\times$ & 172.6$\times$ & 0.00 / 4.00 \\
+\texttt{numerai28.6} (67424, 21, 24, full) & -7.130 & -7.080 & -7.245 & -7.115 & -7.272 & \textbf{-7.296} & \textbf{71.9} & 354.4 & 19193.1 & 4.93$\times$ & 267.1$\times$ & 0.00 / 0.00 \\
+\texttt{optdigits} (3934, 32, 10, full) & 80.544 & 80.990 & 80.126 & 80.655 & 80.030 & \textbf{79.463} & \textbf{103.0} & 177.0 & 656.0 & 1.72$\times$ & 6.4$\times$ & 0.00 / 0.00 \\
+\texttt{pendigits} (7694, 16, 16, full) & 53.182 & 53.975 & 53.924 & 54.828 & 53.905 & \textbf{51.746} & \textbf{48.0} & 137.7 & 694.2 & 2.87$\times$ & 14.5$\times$ & 0.00 / 0.33 \\
+\texttt{philippine} (4082, 308, 16, diag) & 632.345 & 636.185 & 634.961 & 636.088 & 634.608 & \textbf{625.611} & \textbf{43.5} & 64.3 & 601.8 & 1.48$\times$ & 13.8$\times$ & 0.00 / 1.00 \\
+\texttt{satimage} (4501, 36, 12, full) & -5.833 & \textbf{-5.890} & -5.631 & -5.837 & -5.718 & -5.602 & \textbf{47.5} & 126.8 & 1310.4 & 2.67$\times$ & 27.6$\times$ & 0.00 / 0.00 \\
+\texttt{segment} (1617, 17, 7, full) & -3.066 & -2.118 & -0.311 & 0.125 & -0.598 & \textbf{-3.077} & 71.6 & \textbf{62.2} & 92.3 & 0.87$\times$ & 1.3$\times$ & 0.00 / 1.33 \\
+\texttt{shuttle} (40600, 9, 16, full) & \textbf{16.508} & 16.888 & 16.736 & 17.492 & 17.986 & 19.843 & \textbf{112.4} & 301.1 & 5418.2 & 2.68$\times$ & 48.2$\times$ & 0.00 / 2.67 \\
+\texttt{skin\_nonskin} (171539, 3, 16, full) & 12.303 & 12.303 & 12.250 & 12.281 & 12.251 & \textbf{12.234} & \textbf{37.6} & 310.6 & 4944.9 & 8.26$\times$ & 131.6$\times$ & 0.00 / 0.33 \\
+\texttt{spambase} (3220, 57, 12, diag) & \textbf{-104.274} & -100.553 & -89.504 & -78.106 & -91.731 & -63.411 & \textbf{43.5} & 120.4 & 86.8 & 2.77$\times$ & 2.0$\times$ & 0.00 / 0.33 \\
+\texttt{syn\_anisotropic\_30k} (21000, 24, 16, full) & \textbf{38.069} & 38.136 & 39.007 & 39.146 & 38.719 & 38.551 & \textbf{53.8} & 76.8 & 1326.6 & 1.43$\times$ & 24.7$\times$ & 0.00 / 0.33 \\
+\texttt{syn\_highdim128\_50k} (35000, 128, 24, diag) & 192.414 & 192.419 & 192.412 & 192.410 & 187.280 & \textbf{187.132} & 70.8 & \textbf{60.6} & 716.2 & 0.86$\times$ & 10.1$\times$ & 0.00 / 0.33 \\
+\texttt{syn\_highk64\_60k} (42000, 16, 64, full) & \textbf{26.948} & 26.956 & 27.329 & 27.447 & 27.083 & 27.078 & \textbf{137.3} & 142.7 & 10151.5 & 1.04$\times$ & 73.9$\times$ & 0.00 / 9.67 \\
+\texttt{syn\_imbalanced\_40k} (28000, 16, 24, full) & 25.175 & 25.167 & 25.263 & 25.255 & \textbf{24.967} & 25.165 & \textbf{77.2} & 82.2 & 2338.5 & 1.06$\times$ & 30.3$\times$ & 0.00 / 1.33 \\
+\texttt{syn\_overlapping\_30k} (21000, 32, 20, full) & 49.444 & \textbf{49.384} & 49.743 & 49.624 & 49.488 & 49.974 & \textbf{143.1} & 161.8 & 5331.0 & 1.13$\times$ & 37.3$\times$ & 0.00 / 0.00 \\
+\texttt{syn\_scale200k} (140000, 32, 32, full) & 50.266 & 50.266 & 51.596 & 51.659 & 49.536 & \textbf{49.510} & \textbf{92.0} & 159.5 & 14860.4 & 1.73$\times$ & 161.6$\times$ & 0.00 / 7.33 \\
+\texttt{syn\_scale300k\_k64\_full} (210000, 24, 64, full) & 39.762 & 39.762 & 40.795 & 41.275 & 38.686 & \textbf{38.680} & \textbf{138.2} & 543.2 & 67705.1 & 3.93$\times$ & 489.9$\times$ & 0.33 / 26.00 \\
+\texttt{syn\_scale400k\_d256\_diag} (280000, 256, 48, diag) & 379.080 & 379.080 & 388.064 & 387.713 & \textbf{371.955} & 375.290 & 508.1 & \textbf{347.7} & 60851.1 & 0.68$\times$ & 119.8$\times$ & 0.33 / 6.33 \\
+\texttt{syn\_scale500k\_diag} (350000, 48, 32, diag) & 73.075 & 73.075 & 73.460 & 73.284 & \textbf{72.334} & 72.751 & \textbf{67.7} & 252.0 & 6059.7 & 3.72$\times$ & 89.6$\times$ & 0.33 / 0.67 \\
+\texttt{waveform5000} (3500, 40, 12, full) & 59.981 & 59.831 & 60.935 & \textbf{59.666} & 60.639 & 60.855 & \textbf{40.0} & 130.5 & 996.8 & 3.26$\times$ & 24.9$\times$ & 0.00 / 0.00 \\
 \bottomrule
 \end{tabular}%
 }
 \end{table*}
 
+\subsection{Runtime Phase Breakdown and Cold vs.\ Warm CUDA Graph Overhead}
+
+\begin{table}[t]
+\centering
+\caption{Execution phase breakdown in milliseconds across 8 representative datasets under cold start (first call) and warm start (steady-state). Columns decompose total fit time into standardization (\texttt{Std}), $k$-means++ Voronoi seeding (\texttt{Seed}), CUDA Graph warmup \& capture (\texttt{Graph}), EMA replay + revival (\texttt{EMA}), full-batch polish (\texttt{Pol}), and parameter export (\texttt{Exp}).}
+\label{tab:phase_breakdown}
+\scriptsize
+\setlength{\tabcolsep}{2.8pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llccccccc}
+\toprule
+\textbf{Dataset ($N_{\mathrm{tr}}, D, K$)} & \textbf{Mode} & \textbf{Std} & \textbf{Seed} & \textbf{Graph} & \textbf{EMA} & \textbf{Pol} & \textbf{Exp} & \textbf{Total (ms)} \\
+\midrule
+\multirow{2}{*}{\texttt{pendigits} (7.7k, 16, 16, full)}
+  & Cold & 1.1 & 10.9 & 13.9 & 14.2 & 13.6 & 1.0 & 54.8 \\
+  & Warm & 1.2 & 9.4  & 7.6  & 14.2 & 15.3 & 1.4 & \textbf{49.0} \\
+\multirow{2}{*}{\texttt{mnist784\_pca48} (49k, 48, 24, full)}
+  & Cold & 5.4 & 15.9 & 17.1 & 35.8 & 49.4 & 2.2 & 125.8 \\
+  & Warm & 3.6 & 15.9 & 15.3 & 38.5 & 50.6 & 1.6 & \textbf{125.4} \\
+\multirow{2}{*}{\texttt{jannis} (58.6k, 54, 24, full)}
+  & Cold & 7.1 & 16.7 & 14.2 & 44.2 & 60.9 & 2.2 & 145.3 \\
+  & Warm & 4.5 & 16.4 & 17.2 & 46.7 & 60.0 & 1.5 & \textbf{146.3} \\
+\multirow{2}{*}{\texttt{miniboone} (91k, 50, 24, diag)}
+  & Cold & 5.9 & 13.8 & 11.8 & 6.5  & 48.5 & 0.6 & 87.0 \\
+  & Warm & 5.4 & 9.0  & 7.3  & 7.6  & 71.0 & 0.7 & \textbf{100.9} \\
+\multirow{2}{*}{\texttt{syn\_scale200k} (140k, 32, 32, full)}
+  & Cold & 4.4 & 10.4 & 20.0 & 40.6 & 0.0  & 1.7 & 77.1 \\
+  & Warm & 6.4 & 12.0 & 17.3 & 33.6 & 0.0  & 1.3 & \textbf{70.6} \\
+\multirow{2}{*}{\texttt{creditcard} (199k, 29, 24, full)}
+  & Cold & 6.0 & 12.7 & 10.5 & 47.2 & 0.0  & 1.5 & 77.8 \\
+  & Warm & 6.2 & 9.4  & 12.8 & 48.6 & 0.0  & 1.1 & \textbf{78.1} \\
+\multirow{2}{*}{\texttt{syn\_scale500k\_diag} (350k, 48, 32, diag)}
+  & Cold & 28.2 & 8.5  & 80.1 & 10.0 & 0.0  & 0.8 & 127.5 \\
+  & Warm & 38.6 & 15.1 & 10.0 & 10.6 & 0.0  & 0.7 & \textbf{75.0} \\
+\multirow{2}{*}{\texttt{covtype\_581k} (407k, 54, 32, full)}
+  & Cold & 30.0 & 11.7 & 18.6 & 205.9 & 0.0 & 2.1 & 268.2 \\
+  & Warm & 29.6 & 9.9  & 19.2 & 204.7 & 0.0 & 1.5 & \textbf{264.9} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+To ensure transparent systems reporting, Table~\ref{tab:phase_breakdown} decomposes \egmm{} wall-clock latency into six distinct execution phases across cold and warm starts. On medium datasets ($N \le 10^5$), CUDA Graph capture takes $7.3$--$17.2\text{\,ms}$ and EMA replay executes $36$--$45$ mini-batch steps in just $6.5$--$46.7\text{\,ms}$, while closing full-batch polish accounts for $28\%$--$42\%$ of total runtime. On large datasets ($N > 10^5$), \texttt{polish\_ms = 0.0}, and CUDA Graph replay dominates compute efficiency, completing $406{,}708$-sample 54-dimensional full-covariance estimation on \texttt{covtype\_581k} in $264.9\text{\,ms}$ warm ($268.2\text{\,ms}$ cold).
+
 \subsection{Pareto Frontier Dominance Across Compute Budgets}
 
-To verify that speed gains do not trade off against density quality, Figure~\ref{fig:pareto_grid} plots test NLL as a function of wall-clock training time across increasing compute budgets ($E \in \{1, 2, 3, 5, 8, 12\}$ epochs vs.\ batch iterations $\{2, 5, 10, 20, 40, 80\}$). On five of six representative datasets (\texttt{covtype\_581k}, \texttt{mnist784\_pca48}, \texttt{syn\_anisotropic\_30k}, \texttt{syn\_imbalanced\_40k}, \texttt{syn\_scale200k}), \egmm{}'s Pareto frontier sits visibly below and to the left of both \texttt{TorchBatchGMM} and \texttt{OnlineGMM\_tuned}: for example, on \texttt{covtype\_581k}, \egmm{} at $2$ epochs reaches $-300.92$ NLL in $229\text{\,ms}$ and $-303.42$ NLL in $282\text{\,ms}$, whereas \texttt{TorchBatchGMM} plateaus around $-294.44$ NLL even at $80$ iterations ($5.98\text{\,s}$).
+Figure~\ref{fig:pareto_grid} plots test NLL as a function of wall-clock training time across increasing compute budgets ($E \in \{1, 2, 3, 5, 8, 12\}$ epochs vs.\ batch iterations $\{2, 5, 10, 20, 40, 80\}$). Across representative datasets (\texttt{covtype\_581k}, \texttt{miniboone}, \texttt{mnist784\_pca48}, \texttt{syn\_anisotropic\_30k}, \texttt{syn\_imbalanced\_40k}, \texttt{syn\_scale200k}), \egmm{}'s Pareto frontier lies strictly below and to the left of both \texttt{TorchBatchGMM} and \texttt{OnlineGMM\_tuned}: on \texttt{covtype\_581k}, \egmm{} at $2$ epochs reaches $-302.70$ NLL in $283\text{\,ms}$, whereas \texttt{TorchBatchGMM} plateaus around $-294.44$ NLL even at $80$ iterations ($6.38\text{\,s}$).
 
 \begin{figure*}[t]
   \centering
@@ -367,7 +458,7 @@ To verify that speed gains do not trade off against density quality, Figure~\ref
     \includegraphics[width=\linewidth]{fig_pareto_mnist784_pca48.png}
     \caption{\texttt{mnist784\_pca48}}
   \end{subfigure}
-  \vspace{0.5em}
+  \vspace{0.4em}
   \begin{subfigure}[t]{0.32\textwidth}
     \includegraphics[width=\linewidth]{fig_pareto_syn_anisotropic_30k.png}
     \caption{\texttt{syn\_anisotropic\_30k}}
@@ -384,36 +475,42 @@ To verify that speed gains do not trade off against density quality, Figure~\ref
   \label{fig:pareto_grid}
 \end{figure*}
 
-\subsection{Component Revival, Step-Size Sensitivity, and Clustering vs.\ Density Metrics}
+\subsection{Component Revival, Step-Size Sensitivity, and the ARI vs.\ NLL Split Trade-Off}
 
-Across all 23 primary datasets, dead-component collapse is almost completely eliminated: \egmm{} maintains a mean of \textbf{0.10 dead components} (executing $3.46$ mean revivals per run), compared to \textbf{1.87} for \texttt{TorchBatchGMM}, \textbf{2.68} for \texttt{OnlineGMM\_tuned}, \textbf{2.38} for \texttt{NaiveMinibatchGMM}, \textbf{1.17} for \texttt{EMeansInitGMM}, and \textbf{1.16} for \texttt{SklearnGMM}. On challenging high-$K$ or image-manifold datasets, unrevived EM routinely loses components: \texttt{TorchBatchGMM} leaves $9.67$ dead components on \texttt{syn\_highk64\_60k}, $7.33$ on \texttt{syn\_scale200k}, $5.33$ on \texttt{fashion\_mnist\_pca48}, and $5.00$ on \texttt{mnist784\_pca48}, while \egmm{} revives $18.00$, $9.67$, $6.67$, and $8.33$ clusters on average to finish with \textbf{0.00} dead components across every single one.
-
-We also examine downstream hard-clustering labels across the 22 labeled datasets: \egmm{} attains mean Adjusted Rand Index (ARI) $0.3879$ and Normalized Mutual Information (NMI) $0.5692$, compared to \texttt{TorchBatchGMM} ($0.4056$ ARI, $0.5751$ NMI), \texttt{SklearnGMM} ($0.4098$ ARI, $0.5794$ NMI), and \texttt{OnlineGMM\_tuned} ($0.4254$ ARI, $0.5766$ NMI). This minor gap in ARI is expected: maximizing generative likelihood via eigen-splitting splits heavy, skewed, or multi-modal true classes into two tighter Gaussian sub-lobes rather than leaving dead components inactive—improving held-out log-likelihood at the cost of over-partitioning class-level hard labels.
-
-Figure~\ref{fig:scaling_sensitivity} visualizes the synthetic step-size sweep ($600$ runs across varying $(N, K, D, T, B, \alpha_0)$): unlike unconditioned step sizes, diagonal covariances benefit monotonically from larger step sizes $\alpha_0 \in [0.45, 0.70]$, whereas full covariances cross the $50$-iteration Batch EM baseline consistently around $\alpha_0 \approx 0.25$--$0.70$ when conditioned by $\mathrm{eff\_df}$.
-
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
-  \begin{subfigure}[t]{\linewidth}
+  \begin{subfigure}[t]{0.32\textwidth}
     \includegraphics[width=\linewidth]{fig_scaling_diag.png}
-    \caption{Diagonal covariance step-size sensitivity}
-  \end{subfigure}
-  \vspace{0.4em}
-  \begin{subfigure}[t]{\linewidth}
+    \caption{Diagonal step-size sensitivity}
+    \label{fig:scaling_diag_sub}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.32\textwidth}
     \includegraphics[width=\linewidth]{fig_scaling_full.png}
-    \caption{Full covariance step-size sensitivity}
+    \caption{Full step-size sensitivity}
+    \label{fig:scaling_full_sub}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.33\textwidth}
+    \includegraphics[width=\linewidth]{fig_small_dataset_eval.png}
+    \caption{Small-dataset CPU/GPU routing}
+    \label{fig:small_eval}
   \end{subfigure}
-  \caption{Median validation $\Delta\mathrm{NLL}$ relative to $50$-iteration Batch EM across synthetic scaling sweeps as a function of peak EMA rate $\alpha_0$ and epoch budget $T$.}
+  \caption{(a, b) Median validation $\Delta\mathrm{NLL}$ relative to $50$-iteration Batch EM across disjoint synthetic calibration sweeps (\texttt{polish\_steps=0}) as a function of peak EMA rate $\alpha_0$ and epoch budget $T$. (c) Wall-clock scaling across 16 unseen small datasets ordered by workload complexity $W = N_{\mathrm{train}} \cdot K \cdot D$.}
   \label{fig:scaling_sensitivity}
-\end{figure}
+\end{figure*}
+
+Across all 33 primary datasets, dead-component collapse is nearly eliminated: \egmm{} leaves a mean of \textbf{0.05 dead components} (executing $4.94$ mean revivals per run; \texttt{EGMM\_polish0} leaves $0.04$), compared to \textbf{4.49} for \texttt{EGMM\_no\_revival}, \textbf{3.01} for \texttt{TorchBatchGMM}, \textbf{4.16} for \texttt{OnlineGMM\_tuned}, \textbf{4.29} for \texttt{OnlineGMM\_matched\_polish}, \textbf{3.56} for \texttt{NaiveMinibatchGMM}, \textbf{1.87} for \texttt{EMeansInitGMM}, \textbf{1.13} for \texttt{StandardizedSklearnGMM}, and \textbf{1.07} for \texttt{SklearnGMM}. On high-$K$ and large-scale datasets, unrevived EM suffers massive component starvation: \texttt{TorchBatchGMM} leaves $26.00$ dead components on \texttt{syn\_scale300k\_k64\_full}, $9.67$ on \texttt{syn\_highk64\_60k}, $8.00$ on \texttt{higgs\_98k}, and $7.00$ on \texttt{jannis}, whereas \egmm{} finishes with $0.33, 0.00, 0.67$, and $0.00$ dead components respectively.
+
+Our ablation also resolves the causal mechanism behind the \textbf{ARI vs.\ NLL trade-off} across the 32 labeled datasets: \egmm{} attains mean Adjusted Rand Index (ARI) $0.3251$ and NMI $0.4873$, whereas disabling Wedderburn revival (\texttt{EGMM\_no\_revival}) raises mean ARI to $0.3631$ and NMI to $0.4945$ (surpassing \texttt{TorchBatchGMM}'s $0.3467$ ARI and \texttt{OnlineGMM\_tuned}'s $0.3602$ ARI) while worsening test NLL by $+0.5132$ at the median ($p = 7.58 \times 10^{-6}$). When $K$ exceeds or mismatches true class multiplicity, leaving $\sim 4.5$ components dead (\texttt{EGMM\_no\_revival}) avoids subdividing large, skewed classes into two Gaussian sub-lobes---which preserves pairwise class Rand index (ARI) at the expense of inferior continuous density estimation (NLL).
+
+Figures~\ref{fig:scaling_diag_sub}--\ref{fig:scaling_full_sub} visualize the synthetic calibration sweep ($900$ zero-polish runs across varying $(N, K, D, T, B, \alpha_0)$ with revival active on both diagonal and full covariances): diagonal covariances achieve optimal validation NLL across $\alpha_0 \in [0.40, 0.68]$, whereas full covariances benefit from larger $\alpha_0 \in [0.35, 0.80]$ as batch degrees of freedom $\gamma_{\mathrm{df}}$ increase.
 
 \subsection{Out-of-Suite Small-Dataset Generalization ($N_{\mathrm{train}} \le 3831$)}
 
-To test whether \egmm{}'s hyperparameters overfit the 23 primary datasets or degrade on small sample counts ($N < 4000$), we ran a zero-tuning evaluation across 16 external UCI/OpenML datasets ($N_{\mathrm{train}} \in [105, 3831]$), comparing both \texttt{EGMM\_auto} (\texttt{device="auto"}) and \texttt{EGMM\_cuda} (forced CUDA). Results appear in Tables~\ref{tab:wilcoxon_small}--\ref{tab:full_16} and Figure~\ref{fig:small_eval}.
+To verify that \egmm{} does not degrade on small sample counts ($N < 4000$), we ran a zero-tuning evaluation across 16 unseen UCI/OpenML datasets ($N_{\mathrm{train}} \in [105, 3831]$), comparing \texttt{EGMM\_auto} (\texttt{device="auto"}) and \texttt{EGMM\_cuda} (forced CUDA) in Tables~\ref{tab:wilcoxon_small}--\ref{tab:full_16} and Figure~\ref{fig:small_eval}. With \texttt{device="auto"}, \egmm{} routes tiny workloads ($N K D < 1.5 \times 10^5$) to CPU and larger ones to GPU, achieving a \textbf{1.96$\times$} median speedup over GPU \texttt{TorchBatchGMM} ($p = 5.80 \times 10^{-4}$, winning $10/16$ in NLL) and a \textbf{1.67$\times$} median speedup over CPU \texttt{SklearnGMM} ($p = 1.31 \times 10^{-3}$).
 
 \begin{table}[t]
 \centering
-\caption{Zero-tuning generalization across 16 unseen small datasets ($N_{\mathrm{train}} \in [105, 3831]$, 3-seed means). Adaptive CPU/CUDA routing (\texttt{EGMM\_auto}) eliminates GPU launch tax on small matrices.}
+\caption{Zero-tuning generalization across 16 unseen small datasets ($N_{\mathrm{train}} \in [105, 3831]$, 3-seed means).}
 \label{tab:wilcoxon_small}
 \scriptsize
 \setlength{\tabcolsep}{3.5pt}
@@ -422,29 +519,15 @@ To test whether \egmm{}'s hyperparameters overfit the 23 primary datasets or deg
 \toprule
 \textbf{Comparison} & \textbf{W/T/L} & \textbf{Med.\ $\Delta$NLL} & \textbf{$p_{\mathrm{NLL}}$} & \textbf{Med.\ Spd} & \textbf{$p_{\mathrm{time}}$} \\
 \midrule
-\texttt{EGMM\_auto} vs \texttt{TorchBatchGMM}  & \textbf{10/0/6} & $-0.0811$ & $0.0739$ & \textbf{1.88$\times$} & $6.10\times 10^{-5}$ \\
-\texttt{EGMM\_auto} vs \texttt{OnlineGMM\_tuned}& \textbf{12/0/4} & $-0.2119$ & $0.0507$ & $0.74\times$          & $7.63\times 10^{-3}$ \\
-\texttt{EGMM\_auto} vs \texttt{SklearnGMM}     & $5/0/11$        & $+0.1007$ & $0.4037$ & \textbf{1.68$\times$} & $6.29\times 10^{-3}$ \\
-\texttt{EGMM\_cuda} vs \texttt{TorchBatchGMM}  & \textbf{9/0/7}  & $-0.0105$ & $0.5966$ & \textbf{1.14$\times$} & $0.0443$ \\
-\texttt{EGMM\_cuda} vs \texttt{SklearnGMM}     & $5/0/11$        & $+0.1182$ & $0.3755$ & $1.11\times$          & $0.3225$ \\
+\texttt{EGMM\_auto} vs \texttt{TorchBatchGMM}  & \textbf{10/0/6} & $-0.0679$ & $0.0934$ & \textbf{1.96$\times$} & $5.80\times 10^{-4}$ \\
+\texttt{EGMM\_auto} vs \texttt{OnlineGMM\_tuned}& \textbf{11/0/5} & $-0.2119$ & $0.0833$ & $0.71\times$          & $1.83\times 10^{-2}$ \\
+\texttt{EGMM\_auto} vs \texttt{SklearnGMM}     & $5/0/11$        & $+0.1149$ & $0.4037$ & \textbf{1.67$\times$} & $1.31\times 10^{-3}$ \\
+\texttt{EGMM\_cuda} vs \texttt{TorchBatchGMM}  & $8/0/8$         & $-0.0045$ & $0.7820$ & \textbf{1.47$\times$} & $2.50\times 10^{-2}$ \\
+\texttt{EGMM\_cuda} vs \texttt{SklearnGMM}     & $5/0/11$        & $+0.1182$ & $0.3755$ & \textbf{1.22$\times$} & $0.3225$ \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\linewidth]{fig_small_dataset_eval.png}
-  \caption{Wall-clock scaling across the 16 unseen small datasets ordered by workload complexity $W = N_{\mathrm{train}} \cdot K \cdot D$. Below the full-covariance switch ($W < 1.5\times 10^5$), \texttt{EGMM\_auto} routes to CPU and cuts GPU Graph overhead in half ($7$--$35\text{\,ms}$ vs.\ $\sim 25$--$50\text{\,ms}$ on CUDA); above $1.5\times 10^5$, it switches cleanly to GPU ($4$--$7\times$ faster than CPU \texttt{sklearn}).}
-  \label{fig:small_eval}
-\end{figure}
-
-Three clear conclusions emerge:
-\begin{enumerate}[leftmargin=*,nosep]
-  \item \textbf{Small-$N$ boundary ($N \lesssim 1000$):} On tiny datasets such as \texttt{iris}, \texttt{wine}, \texttt{breast\_cancer}, or \texttt{diabetes}, mini-batches nearly cover the entire dataset and full-batch EM already finds comparable modes, erasing stochastic EMA's NLL escape advantage ($p = 0.074$ vs.\ \texttt{TorchBatchGMM}).
-  \item \textbf{Onset of stochastic gains ($N \ge 1300$):} Immediately as sample counts exceed $\sim 1300$ (\texttt{steel\_plates}: $-9.96$ $\Delta$NLL vs.\ \texttt{TorchBatchGMM}; \texttt{page\_blocks}: $-3.51$; \texttt{wall\_robot}: $-0.34$), \egmm{}'s density advantage re-emerges decisively.
-  \item \textbf{Adaptive dispatch value:} Forced CUDA execution spends $\sim 23$--$37\text{\,ms}$ per fit capturing graphs regardless of matrix size (yielding only $1.11\times$ speedup over CPU \texttt{sklearn}, $p = 0.323$). With \texttt{device="auto"}, \egmm{} runs tiny workloads on CPU and large ones on GPU, recovering \textbf{$1.88\times$} median speedup over GPU \texttt{TorchBatchGMM} ($p = 6.10 \times 10^{-5}$) and \textbf{$1.68\times$} over CPU \texttt{sklearn} ($p = 6.29 \times 10^{-3}$).
-\end{enumerate}
 
 \begin{table*}[t]
 \centering
@@ -483,17 +566,17 @@ Three clear conclusions emerge:
 \section{Limitations and Practical Guidance}
 \label{sec:limitations}
 
-To keep our findings reproducible and transparent, we note three explicit boundaries of \egmm{}:
+We highlight three practical boundaries uncovered by our audit and ablations:
 \begin{enumerate}[leftmargin=*,nosep]
-  \item \textbf{Standardized vs.\ raw covariance regularization:} Adding $\epsilon_{\mathrm{reg}} I_D$ ($10^{-6}$) in unit-variance coordinates prevents arbitrary unit dependence and produces massive gains over raw \texttt{SklearnGMM} on scaled/discrete features (\texttt{covtype\_581k}: $-303.081$ vs.\ $-196.125$; \texttt{spambase}: $-105.066$ vs.\ $-63.411$). Conversely, on sparse/heavy-tailed raw-unit distributions spanning multiple orders of magnitude (\texttt{miniboone}, \texttt{steel\_plates}), raw \texttt{1e-6} regularization in \texttt{SklearnGMM} permits tighter density spikes than standardized \texttt{1e-6}. When comparing purely algorithmic dynamics at identical precision against \texttt{TorchBatchGMM}, \egmm{} wins cleanly ($19/23$ NLL, $23/23$ speed).
-  \item \textbf{Tiny-dataset regime ($N \lesssim 1000$):} Stochastic mini-batching offers minimal NLL advantage when $N \le 1000$. Using \texttt{device="auto"} ensures \egmm{} still matches or beats batch EM runtime on CPU without GPU graph capture overhead.
-  \item \textbf{Density likelihood vs.\ class-level ARI:} Because eigen-split revival resolves dead components toward dense sub-modes rather than merging classes, users targeting strictly supervised class recovery (maximizing ARI at fixed $K$) may disable or tune $\rho_{\mathrm{dead}}$ relative to likelihood-focused density modeling.
+  \item \textbf{Standardized vs.\ raw covariance regularization:} Comparing \texttt{StandardizedSklearnGMM} and raw \texttt{SklearnGMM} in Table~\ref{tab:full_33} isolates the exact impact of coordinate standardization: on multi-scale tabular datasets with discrete indicator features (\texttt{covtype\_581k}, \texttt{spambase}, \texttt{har}), unit-variance standardization prevents singular spikes and improves test NLL by $10$--$106$ nats; conversely, on heavy-tailed raw distributions (\texttt{miniboone}), unstandardized \texttt{1e-6} permits tighter raw-axis spikes. Against scale-matched \texttt{StandardizedSklearnGMM} and \texttt{TorchBatchGMM}, \egmm{} wins both in quality ($17/33$ and $26/33$) and speed ($48.21\times$ and $2.68\times$).
+  \item \textbf{Ultra-high-$D$ diagonal workspace chunking ($D \ge 256$):} On \texttt{syn\_scale400k\_d256\_diag} ($N_{\mathrm{train}}=280\text{k}, D=256, K=48$), \egmm{} achieves a massive $-8.98$ NLL improvement over \texttt{TorchBatchGMM} and $119.8\times$ speedup over \texttt{StandardizedSklearnGMM}, but runs at $0.68\times$ the speed of \texttt{TorchBatchGMM} because \texttt{TorchBatchGMM} converges early at iteration 7 whereas \egmm{} completes its full 3-epoch chunked schedule.
+  \item \textbf{Density likelihood vs.\ class-level ARI:} Users optimizing hard-clustering ARI when $K$ exceeds true class count should set \texttt{revive\_dead=False} (\texttt{EGMM\_no\_revival}), whereas users targeting generative density estimation (NLL) should keep Wedderburn revival enabled.
 \end{enumerate}
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-We presented \egmm{}, demonstrating how centered mixed-precision sufficient-statistics reconstruction, batch degrees-of-freedom EMA scaling, moment-preserving eigen-split revival, CUDA Graph execution, and adaptive CPU/GPU dispatch resolve the classic speed, precision, and component-collapse bottlenecks of Gaussian Mixture EM. Across 23 primary datasets, 6 budget Pareto curves, and 16 zero-tuning external small datasets, \egmm{} establishes statistically significant superiority over GPU full-batch EM and validation-tuned online EM without introducing per-dataset tuning hyperparameters. Future work includes extending centered mixed-precision EMA and eigen-splitting to tied/spherical covariances, Bayesian Dirichlet-process mixture truncation, and fused Triton kernels for $K > 256$.
+We presented \egmm{}, extending the sufficient-statistics EMA paradigm of \emeans{}~\citep{bessa2026emeans} from first-moment centroids to second-order Gaussian mixture density estimation via centered mixed-precision moment reconstruction, batch degrees-of-freedom scaling laws, moment-preserving Wedderburn rank-1 eigen-split revival, CUDA Graph execution, and adaptive CPU/GPU dispatch. Across 33 primary datasets, 7 large-scale zero-polish benchmarks, 5 controlled fairness ablations, 6 Pareto sweeps, and 16 unseen small datasets, \egmm{} delivers statistically significant quality and runtime improvements over GPU batch EM and tuned online EM while achieving $48\times$--$161\times$ speedups over CPU \texttt{scikit-learn}.
 
 \bibliographystyle{plainnat}
 \bibliography{references}

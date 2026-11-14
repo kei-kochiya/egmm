@@ -48,7 +48,7 @@ def revive_dead_components(
 
     if covariance_type == "diag":
         covs_work = (Q / M_safe.unsqueeze(-1) - means_work * means_work).clamp_min_(0.0)
-        spreads = covs_work.max(dim=-1).values
+        spreads = covs_work.sum(dim=-1).clamp_min_(0.0)
     else:
         covs_work = Q / M_safe.view(K, 1, 1) - torch.bmm(
             means_work.unsqueeze(-1), means_work.unsqueeze(-2)
@@ -77,8 +77,10 @@ def revive_dead_components(
         lam1 = d_covs[rev_arange, j_star].clamp_min(0.0)
         v1 = torch.zeros((n_rev, D), device=S.device, dtype=S.dtype)
         v1[rev_arange, j_star] = 1.0
+        shifts = (split_delta * torch.sqrt(lam1)).unsqueeze(-1) * v1
     elif S.device.type == "cuda":
-        d_covs = covs_work[donor_idx].to(torch.float32)
+        d_covs_s = covs_work[donor_idx]
+        d_covs = d_covs_s.to(torch.float32)
         diags = torch.diagonal(d_covs, dim1=-2, dim2=-1)
         j_star = torch.argmax(diags, dim=-1)
         v = torch.zeros((n_rev, D), device=S.device, dtype=torch.float32)
@@ -86,15 +88,18 @@ def revive_dead_components(
         for _ in range(5):
             v_next = torch.bmm(d_covs, v.unsqueeze(-1)).squeeze(-1)
             v = v_next / v_next.norm(dim=-1, keepdim=True).clamp_min(1e-12)
-        Av = torch.bmm(d_covs, v.unsqueeze(-1)).squeeze(-1)
-        lam1 = (v * Av).sum(dim=-1).clamp_min(0.0).to(S.dtype)
         v1 = v.to(S.dtype)
+        # Wedderburn rank-1 reduction: delta = split_delta * (Sigma_d v) / sqrt(v^T Sigma_d v)
+        # Guarantees Sigma_d - delta delta^T >= (1 - split_delta^2) Sigma_d >= 0 for ANY vector v.
+        Av = torch.bmm(d_covs_s, v1.unsqueeze(-1)).squeeze(-1)
+        vAv = (v1 * Av).sum(dim=-1).clamp_min(0.0)
+        inv_sqrt_vAv = torch.where(vAv > 1e-30, torch.rsqrt(vAv.clamp_min(1e-30)), torch.zeros_like(vAv))
+        shifts = (split_delta * inv_sqrt_vAv).unsqueeze(-1) * Av
     else:
         eigvals, eigvecs = torch.linalg.eigh(covs_work[donor_idx].to(torch.float64))
         lam1 = eigvals[:, -1].clamp_min(0.0).to(S.dtype)
         v1 = eigvecs[:, :, -1].to(S.dtype)
-
-    shifts = (split_delta * torch.sqrt(lam1)).unsqueeze(-1) * v1
+        shifts = (split_delta * torch.sqrt(lam1)).unsqueeze(-1) * v1
     m_half = 0.5 * (M_work[donor_idx] + M_work[dead_idx])
     mu_d = means_work[donor_idx]
     means_work[donor_idx] = mu_d - shifts
