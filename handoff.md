@@ -60,8 +60,8 @@ While the current codebase and TMLR manuscript are verified and statistically so
 4. **Exact Affine Moment Transformation for Non-Stationary `partial_fit` Streams:**
    - *Observation:* In `estimator.py`, `partial_fit` freezes the feature standardizer (`_x_mean_f64`, `_x_std_f64`) on batch 0 so accumulated moments $(M, \mathbf{S}, \mathbf{Q})$ stay in a fixed coordinate system.
    - *Improvement:* Maintain Welford running mean/variance across `partial_fit` calls and apply the exact closed-form affine transformation to $(M, \mathbf{S}, \mathbf{Q})$ whenever $(\hat{\boldsymbol{\mu}}, \hat{\boldsymbol{\sigma}})$ updates.
-5. **Early-Stopping Check in Ultra-High-$D$ Diagonal Mode (`syn_scale400k_d256_diag`):**
-   - *Observation:* On `syn_scale400k_d256_diag` ($N_{\mathrm{train}}=280\text{k}, D=256, K=48$), `EGMM` beats `TorchBatchGMM` by $-8.98$ NLL but takes $508\text{ ms}$ vs $348\text{ ms}$ ($0.68\times$) because `TorchBatchGMM` stops early at iteration 7 while `EGMM` runs all 3 chunked epochs. Adding a lightweight per-epoch batch-NLL convergence check when $B K D > 3.2 \times 10^7$ can make `EGMM` faster on all 33/33 datasets.
+5. **Single-Pass / Device-Cast Standardization for Ultra-High-$D$ Diagonal Workloads (`syn_scale400k_d256_diag`):**
+   - *Observation:* On `syn_scale400k_d256_diag` ($N_{\mathrm{train}}=280\text{k}, D=256, K=48, N D = 7.17 \times 10^7$), `EGMM` beats `TorchBatchGMM` by $-8.98$ NLL and runs in $170\text{--}297\text{ ms}$ in standalone/seed-0 runs, but averages $508.1\text{ ms}$ vs $347.7\text{ ms}$ ($0.68\times$) in the 3-seed primary sweep because for $N D > 1.6 \times 10^7$ the out-of-core standardizer streams host `float64` chunks across PCIe in two passes ($2 \times 573\text{ MB}$) immediately after CPU `SklearnGMM` page-faults host memory. Streaming `float32` slices directly to GPU during a single pass can eliminate the second PCIe pass and make `EGMM` faster on all 33/33 datasets.
 
 ---
 
