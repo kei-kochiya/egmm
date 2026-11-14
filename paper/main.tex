@@ -18,6 +18,17 @@
 
 \graphicspath{{figures/}}
 
+\renewcommand{\topfraction}{0.95}
+\renewcommand{\bottomfraction}{0.95}
+\renewcommand{\textfraction}{0.05}
+\renewcommand{\floatpagefraction}{0.85}
+\renewcommand{\dbltopfraction}{0.95}
+\renewcommand{\dblfloatpagefraction}{0.85}
+\setcounter{topnumber}{4}
+\setcounter{bottomnumber}{4}
+\setcounter{totalnumber}{6}
+\setcounter{dbltopnumber}{4}
+
 \newtheorem{theorem}{Theorem}
 \newtheorem{proposition}{Proposition}
 \newtheorem{remark}{Remark}
@@ -281,6 +292,13 @@ All experiments were executed on an NVIDIA GeForce RTX 5070 GPU paired with an I
 \paragraph{4. Expanded 33-dataset primary suite + 16 unseen small datasets.}
 Our primary suite contains \textbf{33 datasets} spanning small ($N_{\mathrm{train}} < 5\text{k}$), medium ($7\text{k}$--$98\text{k}$), and large ($140\text{k}$--$406.7\text{k}$) tabular and image problems ($D \in [3, 561]$, $K \in [7, 64]$, 25 full-covariance and 8 diagonal-covariance): 25 real OpenML/UCI benchmarks~\citep{blackard1999covertype,lecun1998mnist,xiao2017fashion,roe2005miniboone} (including medium/large additions \texttt{jannis}, \texttt{numerai28.6}, \texttt{higgs\_98k}, \texttt{philippine}, \texttt{gas\_drift}, \texttt{har}, \texttt{skin\_nonskin}, and \texttt{creditcard}) and 8 synthetic stress mixtures (including \texttt{syn\_scale300k\_k64\_full} and \texttt{syn\_scale400k\_d256\_diag}). Notably, \textbf{7 large-scale datasets} have $N_{\mathrm{train}} > 100{,}000$, where \egmm{} runs with \texttt{polish\_steps=0} by default. We also evaluate \textbf{16 unseen small datasets} ($N_{\mathrm{train}} \in [105, 3831]$).
 
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.90\textwidth]{fig_speedup_vs_nll.png}
+  \caption{Wall-clock speedup vs.\ held-out test $\Delta\mathrm{NLL}$ relative to GPU \texttt{TorchBatchGMM} across all 33 primary benchmark datasets (3-seed means; symlog vertical axis with linear region $[-1.5, 1.5]$). \egmm{} accelerates training on $30/33$ datasets (up to $8.26\times$) and improves held-out test NLL on $26/33$ datasets.}
+  \label{fig:speedup_scatter}
+\end{figure*}
+
 \section{Results and Analysis}
 \label{sec:results}
 
@@ -337,13 +355,6 @@ Table~\ref{tab:wilcoxon_main} summarizes paired non-parametric tests across all 
   \caption{Mean held-out test NLL ranks across all 33 datasets (Friedman $\chi^2_F = 80.92, p = 2.30 \times 10^{-15}$, Nemenyi $\mathrm{CD}_{0.05} = 1.57$). \egmm{} ranks strictly first ($2.485$), ahead of \texttt{StandardizedSklearnGMM} ($2.576$) and \texttt{SklearnGMM} ($3.030$), and statistically superior to \texttt{OnlineGMM\_tuned} ($4.485$), \texttt{EMeansInitGMM} ($5.394$), and \texttt{NaiveMinibatchGMM} ($6.000$).}
   \label{fig:cd_ranks}
 \end{figure}
-
-\begin{figure*}[t]
-  \centering
-  \includegraphics[width=0.92\textwidth]{fig_speedup_vs_nll.png}
-  \caption{Wall-clock speedup vs.\ held-out test $\Delta\mathrm{NLL}$ relative to GPU \texttt{TorchBatchGMM} across all 33 primary benchmark datasets (3-seed means; symlog vertical axis with linear region $[-1.5, 1.5]$). \egmm{} accelerates training on $30/33$ datasets (up to $8.26\times$) and improves held-out test NLL on $26/33$ datasets.}
-  \label{fig:speedup_scatter}
-\end{figure*}
 
 \begin{table*}[t]
 \centering
@@ -506,29 +517,6 @@ Figures~\ref{fig:scaling_diag_sub}--\ref{fig:scaling_full_sub} visualize the syn
 
 \subsection{Out-of-Suite Small-Dataset Generalization ($N_{\mathrm{train}} \le 3831$)}
 
-To verify that \egmm{} does not degrade on small sample counts ($N < 4000$), we ran a zero-tuning evaluation across 16 unseen UCI/OpenML datasets ($N_{\mathrm{train}} \in [105, 3831]$), comparing \texttt{EGMM\_auto} (\texttt{device="auto"}) and \texttt{EGMM\_cuda} (forced CUDA) in Tables~\ref{tab:wilcoxon_small}--\ref{tab:full_16} and Figure~\ref{fig:small_eval}. With \texttt{device="auto"}, \egmm{} routes tiny workloads ($N K D < 1.5 \times 10^5$) to CPU and larger ones to GPU, achieving a \textbf{1.96$\times$} median speedup over GPU \texttt{TorchBatchGMM} ($p = 5.80 \times 10^{-4}$, winning $10/16$ in NLL) and a \textbf{1.67$\times$} median speedup over CPU \texttt{SklearnGMM} ($p = 1.31 \times 10^{-3}$).
-
-\begin{table}[t]
-\centering
-\caption{Zero-tuning generalization across 16 unseen small datasets ($N_{\mathrm{train}} \in [105, 3831]$, 3-seed means).}
-\label{tab:wilcoxon_small}
-\scriptsize
-\setlength{\tabcolsep}{3.5pt}
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{lccccc}
-\toprule
-\textbf{Comparison} & \textbf{W/T/L} & \textbf{Med.\ $\Delta$NLL} & \textbf{$p_{\mathrm{NLL}}$} & \textbf{Med.\ Spd} & \textbf{$p_{\mathrm{time}}$} \\
-\midrule
-\texttt{EGMM\_auto} vs \texttt{TorchBatchGMM}  & \textbf{10/0/6} & $-0.0679$ & $0.0934$ & \textbf{1.96$\times$} & $5.80\times 10^{-4}$ \\
-\texttt{EGMM\_auto} vs \texttt{OnlineGMM\_tuned}& \textbf{11/0/5} & $-0.2119$ & $0.0833$ & $0.71\times$          & $1.83\times 10^{-2}$ \\
-\texttt{EGMM\_auto} vs \texttt{SklearnGMM}     & $5/0/11$        & $+0.1149$ & $0.4037$ & \textbf{1.67$\times$} & $1.31\times 10^{-3}$ \\
-\texttt{EGMM\_cuda} vs \texttt{TorchBatchGMM}  & $8/0/8$         & $-0.0045$ & $0.7820$ & \textbf{1.47$\times$} & $2.50\times 10^{-2}$ \\
-\texttt{EGMM\_cuda} vs \texttt{SklearnGMM}     & $5/0/11$        & $+0.1182$ & $0.3755$ & \textbf{1.22$\times$} & $0.3225$ \\
-\bottomrule
-\end{tabular}%
-}
-\end{table}
-
 \begin{table*}[t]
 \centering
 \caption{Zero-shot evaluation across 16 unseen small UCI/OpenML datasets ($N_{\mathrm{train}} \in [105, 3831]$, 3-seed means).}
@@ -562,6 +550,29 @@ To verify that \egmm{} does not degrade on small sample counts ($N < 4000$), we 
 \end{tabular}%
 }
 \end{table*}
+
+To verify that \egmm{} does not degrade on small sample counts ($N < 4000$), we ran a zero-tuning evaluation across 16 unseen UCI/OpenML datasets ($N_{\mathrm{train}} \in [105, 3831]$), comparing \texttt{EGMM\_auto} (\texttt{device="auto"}) and \texttt{EGMM\_cuda} (forced CUDA) in Tables~\ref{tab:wilcoxon_small}--\ref{tab:full_16} and Figure~\ref{fig:small_eval}. With \texttt{device="auto"}, \egmm{} routes tiny workloads ($N K D < 1.5 \times 10^5$) to CPU and larger ones to GPU, achieving a \textbf{1.96$\times$} median speedup over GPU \texttt{TorchBatchGMM} ($p = 5.80 \times 10^{-4}$, winning $10/16$ in NLL) and a \textbf{1.67$\times$} median speedup over CPU \texttt{SklearnGMM} ($p = 1.31 \times 10^{-3}$).
+
+\begin{table}[t]
+\centering
+\caption{Zero-tuning generalization across 16 unseen small datasets ($N_{\mathrm{train}} \in [105, 3831]$, 3-seed means).}
+\label{tab:wilcoxon_small}
+\scriptsize
+\setlength{\tabcolsep}{3.5pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Comparison} & \textbf{W/T/L} & \textbf{Med.\ $\Delta$NLL} & \textbf{$p_{\mathrm{NLL}}$} & \textbf{Med.\ Spd} & \textbf{$p_{\mathrm{time}}$} \\
+\midrule
+\texttt{EGMM\_auto} vs \texttt{TorchBatchGMM}  & \textbf{10/0/6} & $-0.0679$ & $0.0934$ & \textbf{1.96$\times$} & $5.80\times 10^{-4}$ \\
+\texttt{EGMM\_auto} vs \texttt{OnlineGMM\_tuned}& \textbf{11/0/5} & $-0.2119$ & $0.0833$ & $0.71\times$          & $1.83\times 10^{-2}$ \\
+\texttt{EGMM\_auto} vs \texttt{SklearnGMM}     & $5/0/11$        & $+0.1149$ & $0.4037$ & \textbf{1.67$\times$} & $1.31\times 10^{-3}$ \\
+\texttt{EGMM\_cuda} vs \texttt{TorchBatchGMM}  & $8/0/8$         & $-0.0045$ & $0.7820$ & \textbf{1.47$\times$} & $2.50\times 10^{-2}$ \\
+\texttt{EGMM\_cuda} vs \texttt{SklearnGMM}     & $5/0/11$        & $+0.1182$ & $0.3755$ & \textbf{1.22$\times$} & $0.3225$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
 
 \section{Limitations and Practical Guidance}
 \label{sec:limitations}
