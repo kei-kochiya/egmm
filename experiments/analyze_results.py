@@ -595,8 +595,15 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
                 if c not in nl:
                     cells.append("failed")
                     continue
-                pm = f"{{\\tiny$\\pm${hs.loc[(dsn, c)]:.2f}}}" if c in ("EGMM", "TorchBatchGMM", "StandardizedSklearnGMM") else ""
-                cells.append(bold_if(f"{nl[c]:.3f}", round(nl[c], 3) == best) + pm)
+                def big(v, nd):  # math-mode body; scientific notation for the metric-artifact rows (|NLL| >= 1e4)
+                    if abs(v) < 1e4:
+                        return f"{v:.{nd}f}"
+                    e = int(math.floor(math.log10(abs(v))))
+                    return f"{v / 10**e:.2f}{{\\times}}10^{{{e}}}"
+
+                pm = f"{{\\tiny$\\pm {big(hs.loc[(dsn, c)], 2)}$}}" if c in ("EGMM", "TorchBatchGMM", "StandardizedSklearnGMM") else ""
+                val = f"{nl[c]:.3f}" if abs(nl[c]) < 1e4 else f"${big(nl[c], 3)}$"
+                cells.append(bold_if(val, round(nl[c], 3) == best) + pm)
             te = hg.loc[(dsn, "EGMM"), "fit_time"]
             cells.append(f"{te * 1e3:.1f}")
             cells.append(f"{hg.loc[(dsn, 'TorchBatchGMM'), 'fit_time'] / te:.2f}$\\times$")
@@ -1133,6 +1140,11 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
         macros["SplitAdvViol"] = str(int((sp["lmin_classical_adversarial"] < 0).sum()))
         lines.append(f"  split PSD check: {len(sp)} trials; classical violations (5-step power iteration) = {int((sp['lmin_classical'] < 0).sum())}; "
                      f"Wedderburn = {int((sp['lmin_wedderburn'] < 0).sum())}; classical with 1-step power iteration = {int((sp['lmin_classical_adversarial'] < 0).sum())}")
+
+    # ---------------- revised paper: stronger batch-EM baselines, large N, ablations (docs/experiments/next)
+    from experiments.next.paper_results import add_next_results
+
+    add_next_results(EXP, GEN, macros, lines)
 
     # ---------------- write outputs
     (out_exp / "stats_summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")

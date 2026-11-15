@@ -83,9 +83,11 @@ class TorchBatchGMMFast(TorchBatchGMM):
                 vals = [v + log_jac for v in lbs[: it + 1].cpu().tolist()]  # the only host sync
                 j = self._first_converged(vals, checked, it + 1)
                 if j is not None:
+                    self.n_iter_executed_ = it + 1  # iterations actually computed (>= the stopping iteration)
                     return self._finish(X_std, states[j], j, vals, max_iters, True)
                 checked = it + 1
                 states = {it: states[it]}
+        self.n_iter_executed_ = max_iters
         return self._finish(X_std, states[max_iters - 1], max_iters - 1, vals, max_iters, False)
 
 
@@ -162,12 +164,14 @@ class TorchBatchGMMGraph(TorchBatchGMMFast):
                 j = self._first_converged(vals, checked, it + 1)
                 if j is not None:
                     result = self._finish(X_std, states[j], j, vals, max_iters, True)
+                    self.n_iter_executed_ = it + 2  # replayed iterations plus the warm-up iteration
                     break
                 checked = it + 1
                 states = {it: states[it]}
         del graph
         if result is None:
             result = self._finish(X_std, states[max_iters - 1], max_iters - 1, vals, max_iters, False)
+            self.n_iter_executed_ = max_iters + 1
         return result
 
 

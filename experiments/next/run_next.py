@@ -17,6 +17,13 @@ Stages (every stage interleaves all its methods in one session, in a shuffled or
   are in ``data/large/``): e-GMM (r0..r2 and n3), the fast and graph batch EM, ``TorchBatchGMM`` and, at
   N <= 1M only, standardized scikit-learn (seed 0, one timing).
 
+* ``speed2`` (prepared after the mock reviews, run only when the GPU is free): re-times the development,
+  holdout and large-N suites (one session each: ``speed2_dev``, ``speed2_holdout``, ``speed2_large``) with
+  batch-EM variants that check convergence every iteration (``_fast1``, ``_graph1``) next to the 5-iteration
+  ones, logging executed iterations and GPU clock/temperature per (dataset, seed); adds an e-GMM float64
+  training run on full-covariance development datasets, and at large N full-data-seeded batch EM and
+  budget curves (batch EM with 2-20 iterations, e-GMM with 1-3 epochs) for time-to-quality comparisons.
+
 All results go to ``docs/experiments/next/*.csv`` (rewritten after each dataset); analysis:
 ``experiments/next/analyze_next.py``. The library (``src/egmm``) is not modified.
 """
@@ -25,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import subprocess
 import time
 from pathlib import Path
 
@@ -32,7 +40,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from egmm.baselines import CappeMoulinesOnlineGMM, StandardizedSklearnGMM, TorchBatchGMM
+from egmm.baselines import CappeMoulinesOnlineGMM, StandardizedSklearnGMM, TorchBatchGMM, TorchBatchGMMFullInit
 from egmm.estimator import EGMM
 from egmm.scaling import auto_hyperparameters
 from experiments.datasets import DatasetSplit, load_benchmark_suite
@@ -114,10 +122,44 @@ def diag_family(ds, device, seed):
     }
 
 
+def speed2_family(K, cov, device, seed, large=False, with_f64=False):
+    """Re-timing after the mock reviews: every-iteration convergence checks next to the 5-iteration ones."""
+    common = dict(n_components=K, covariance_type=cov, max_iter=50, tol=1e-3, device=device, random_state=seed)
+    m = {
+        "EGMM_r0": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
+        "TorchBatchGMM": TorchBatchGMM(**common),
+        "TorchBatchGMM_fast": TorchBatchGMMFast(**common),
+        "TorchBatchGMM_fast1": TorchBatchGMMFast(**common, check_every=1),
+        "TorchBatchGMM_graph": TorchBatchGMMGraph(**common),
+        "TorchBatchGMM_graph1": TorchBatchGMMGraph(**common, check_every=1),
+    }
+    if with_f64 and cov == "full":  # e-GMM's full-covariance float32 path vs float64 training (identical streams)
+        m["EGMM_f64"] = EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed, dtype="float64")
+    if large:
+        m["TorchBatchGMM_fullinit"] = TorchBatchGMMFullInit(**common)  # full-data seeding as a quality reference
+        for it in (2, 3, 5, 10, 20):  # batch-EM budget curve (fixed iterations, no early stop)
+            m[f"TorchBatchGMM_it{it}"] = TorchBatchGMMGraph(**{**common, "max_iter": it, "tol": 0.0}, check_every=1)
+        for ep in (1, 3):  # e-GMM budget curve (at this N there is no polish)
+            m[f"EGMM_e{ep}"] = EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed, max_epochs=ep)
+    return m
+
+
+def gpu_state() -> dict:
+    """SM clock (MHz), temperature (C) and power (W) from nvidia-smi, read outside any timed region."""
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=clocks.sm,temperature.gpu,power.draw", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=10).stdout.strip().splitlines()[0]
+        clk, temp, pw = (float(x) for x in out.split(","))
+        return dict(gpu_sm_clock=clk, gpu_temp=temp, gpu_power=pw)
+    except Exception:  # noqa: BLE001 - logging only
+        return {}
+
+
 def run_one(model, ds: DatasetSplit, device: str, repeats: int) -> dict:
     try:
         res = evaluate_model(model, ds, device=device, repeats=repeats)
         res["lower_bound"] = float(getattr(model, "lower_bound_", float("nan")))
+        res["n_iter_executed"] = float(getattr(model, "n_iter_executed_", float("nan")))
         res["error"] = ""
     except Exception as exc:  # recorded, never dropped silently
         res = {"fit_time": float("nan"), "test_nll": float("nan"), "val_nll": float("nan"), "error": repr(exc)[:300]}
@@ -141,6 +183,7 @@ def run_stage(name: str, datasets, make_models, device: str, repeats: int, seeds
         N, D = ds.X_train.shape
         for seed in seeds:
             models = make_models(ds, seed)
+            gstate = gpu_state() if device == "cuda" else {}
             if extra is not None:
                 models.update(extra(ds, seed))
             order = list(models)
@@ -149,7 +192,7 @@ def run_stage(name: str, datasets, make_models, device: str, repeats: int, seeds
                 rep = 1 if m.startswith("StdSklearn") else repeats
                 res = run_one(models[m], ds, "cpu" if m.startswith("StdSklearn") else device, rep)
                 res.update(dict(dataset=ds.name, regime=ds.regime, N_train=N, D=D, K=ds.n_components,
-                                cov_type=ds.recommended_cov, seed=seed, method=m, stage=name))
+                                cov_type=ds.recommended_cov, seed=seed, method=m, stage=name, **gstate))
                 rows.append(res)
                 del models[m]
                 gc.collect()
@@ -215,6 +258,23 @@ def stage_large(device, repeats, smoke=False, sizes=("1m", "3m", "10m")):
     return run_stage("large" if not smoke else "smoke_large", dss, mk, device, repeats, seeds=SEEDS if not smoke else (0,))
 
 
+def stage_speed2(device, repeats, smoke=False, sizes=("1m", "3m", "10m")):
+    from experiments.holdout_suite import load_holdout_suite
+    from experiments.next.large_data import iter_large_suite, make_large_synthetic
+    sfx = "smoke_" if smoke else ""
+    seeds = SEEDS if not smoke else (0,)
+    dev = load_benchmark_suite() if not smoke else smoke_datasets()
+    run_stage(sfx + "speed2_dev", dev, lambda ds, seed: speed2_family(ds.n_components, ds.recommended_cov, device, seed,
+                                                                       with_f64=True), device, repeats, seeds=seeds)
+    if not smoke:
+        run_stage("speed2_holdout", load_holdout_suite(),
+                  lambda ds, seed: speed2_family(ds.n_components, ds.recommended_cov, device, seed), device, repeats, seeds=seeds)
+    large = (iter_large_suite(include_real=True, sizes=sizes) if not smoke
+             else [make_large_synthetic("smoke_large_full", 20_000, 8, 4, "full", 12.0, 1)])
+    run_stage(sfx + "speed2_large", large, lambda ds, seed: speed2_family(ds.n_components, ds.recommended_cov, device, seed,
+                                                                          large=True), device, 3 if not smoke else 1, seeds=seeds)
+
+
 def smoke_datasets():
     from experiments.datasets import _make_hard_synthetic
     return [_make_hard_synthetic("smoke_full", "smoke", 6_000, 8, 6, 7, "full"),
@@ -241,6 +301,8 @@ def main() -> None:
         stage_diag(args.device, repeats, args.smoke)
     if "large" in stages:
         stage_large(args.device, 3 if not args.smoke else 1, args.smoke, tuple(args.large_sizes.split(",")))
+    if "speed2" in stages:
+        stage_speed2(args.device, repeats, args.smoke, tuple(args.large_sizes.split(",")))
     print(f"all stages done in {(time.time() - t0) / 60:.1f} min", flush=True)
 
 

@@ -153,3 +153,32 @@ Median M-steps per fit: EGMM=42.0 (T_steps + executed polish) vs TorchBatchGMM i
   float32 vs float64 training (shared RNG): max |d mean test NLL| = 0.239 (miniboone)
   per-run max |d test NLL| = 0.280 (('har', np.int64(1)))
   split PSD check: 5000 trials; classical violations (5-step power iteration) = 0; Wedderburn = 0; classical with 1-step power iteration = 0
+
+=== Revised paper: follow-up runs (docs/experiments/next; one session per suite) ===
+development: e-GMM vs fastest batch EM: median 1.22x (faster on 21/33); with every-iteration checks (estimate) 1.15x; fastest variant {'TorchBatchGMM_graph': 29, 'TorchBatchGMM': 3, 'TorchBatchGMM_f32chol': 1}
+holdout (post hoc): e-GMM vs fastest batch EM: median 1.03x (faster on 9/16); with every-iteration checks (estimate) 1.03x; fastest variant {'TorchBatchGMM_graph': 15, 'TorchBatchGMM_fast': 1}
+large N: e-GMM vs fastest batch EM: median 3.20x (faster on 8/8); with every-iteration checks (estimate) 2.92x; fastest variant {'TorchBatchGMM_graph': 4, 'TorchBatchGMM': 3, 'TorchBatchGMM_fast': 1}
+large N per-dataset speedups vs fastest: {'higgs': 20.18, 'susy': 22.41, 'syn10m_diag': 2.91, 'syn10m_full': 3.49, 'syn1m_diag': 1.48, 'syn1m_full': 2.85, 'syn3m_diag': 2.14, 'syn3m_full': 3.95}; adjusted {'higgs': 19.72, 'susy': 22.41, 'syn10m_diag': 2.25, 'syn10m_full': 3.22, 'syn1m_diag': 1.26, 'syn1m_full': 2.61, 'syn3m_diag': 1.53, 'syn3m_full': 3.8}
+Dev: graph vs TorchBatchGMM NLL W/T/L 4/24/5 (raw p 0.2876), largest change without artifacts +5.63/-0.83; stopping iteration differs on 12/99 runs (max 35)
+Ho: graph vs TorchBatchGMM NLL W/T/L 8/5/3 (raw p 0.1272), largest change without artifacts +6.13/-0.72; stopping iteration differs on 17/48 runs (max 19)
+graph factor (EGMM vs eager / vs eager without alpha sync): dev 1.79x / 1.75x; holdout 2.37x / 2.35x
+schedule ablation: cosine vs EGMM_sched_rm: W/T/L 26/1/6, median dNLL -0.1339, Holm p 0.005459
+  Small (n=26): W/T/L 19/1/6, median -0.1043, raw p 0.03817
+  Large (n=7): W/T/L 7/0/0, median -0.3104, raw p 0.01562
+schedule ablation: cosine vs EGMM_sched_const: W/T/L 23/0/10, median dNLL -0.0215, Holm p 0.009303
+  Small (n=26): W/T/L 16/0/10, median -0.0168, raw p 0.1165
+  Large (n=7): W/T/L 7/0/0, median -0.2347, raw p 0.01562
+holdout post hoc: e-GMM vs OnlineGMM_tuned: W/T/L 13/0/3, median dNLL -1.117, Holm p 0.005035
+holdout post hoc: e-GMM vs OnlineGMM_matched_polish: W/T/L 11/0/5, median dNLL -0.435, Holm p 0.1046
+holdout post hoc: e-GMM vs EGMM_no_revival: W/T/L 10/5/1, median dNLL -0.349, Holm p 0.03649
+  vs matched polish on full-covariance datasets without artifacts (n=12): 9/0/3, median -0.435, raw p 0.01611
+best-of-2 (val) Dev vs TorchBatchGMM NLL: W/T/L 30/0/3, median -0.367, raw p 3.874e-06; time ratio fastest batch / restarts 0.62
+best-of-2 (lb) Dev vs TorchBatchGMM NLL: W/T/L 31/0/2, median -0.530, raw p 2.489e-07; time ratio fastest batch / restarts 0.62
+best-of-3 (val) Dev vs TorchBatchGMM NLL: W/T/L 30/1/2, median -0.594, raw p 1.49e-07; time ratio fastest batch / restarts 0.40
+best-of-3 (lb) Dev vs TorchBatchGMM NLL: W/T/L 30/0/3, median -0.586, raw p 3.453e-07; time ratio fastest batch / restarts 0.40
+best-of-2 (val) Lg vs TorchBatchGMM NLL: W/T/L 8/0/0, median -0.578, raw p 0.007812; time ratio fastest batch / restarts 1.63
+best-of-2 (lb) Lg vs TorchBatchGMM NLL: W/T/L 8/0/0, median -0.578, raw p 0.007812; time ratio fastest batch / restarts 1.63
+best-of-3 (val) Lg vs TorchBatchGMM NLL: W/T/L 8/0/0, median -0.612, raw p 0.007812; time ratio fastest batch / restarts 1.08
+best-of-3 (lb) Lg vs TorchBatchGMM NLL: W/T/L 8/0/0, median -0.612, raw p 0.007812; time ratio fastest batch / restarts 1.08
+large N: NLL vs TorchBatchGMM {'syn1m_full': -0.4811, 'syn3m_full': -0.5472, 'syn10m_full': -1.1896, 'syn1m_diag': 0.0005, 'syn3m_diag': 0.0008, 'syn10m_diag': -0.0011, 'susy': -0.4753, 'higgs': -4.0759}; TorchBatchGMM iterations per run synthetic 5-10, HIGGS 38-50, SUSY 50
+diag: alpha0=0.85 vs deployed: improves >1 nat on 6/10 (gas_drift, har, isolet, philippine, syn_highdim128_50k, volkert); worst spambase +37.46 (its e-GMM seed SD 20.5); polish without early stop max |d| 0.0003

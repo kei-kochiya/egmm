@@ -30,6 +30,8 @@ the submitted paper; results land in `docs/experiments/next/`.
 
 * `python experiments/next/run_next.py --stages dev,holdout,diag,large` (GPU), then
   `python experiments/next/analyze_next.py` -> `docs/experiments/next/summary.txt`.
+* The revised paper's numbers and tables (`tab_speed_next`, `tab_large`, `tab_diag`, macros `\rX...`) come from
+  `paper_results.py`, which `experiments/analyze_results.py` calls; `verify_tables.py` covers them too.
 * Same harness as the paper (`evaluate_model`: GPU clock warm-up, median of 5 timed refits, 3 seeds,
   shuffled method order); every stage interleaves all its methods in one session, so speedups are never
   cross-session. Failed fits are recorded in the CSV `error` column.
@@ -51,6 +53,22 @@ the submitted paper; results land in `docs/experiments/next/`.
 * Restarts: the primary rule is selection by validation NLL; "beats batch EM" requires W > L, Holm
   p < 0.05 against the fastest batch-EM variant on the development suite before a holdout is planned.
 * Large N: report per-dataset times and NLLs; no significance test (n = 6 synthetic datasets).
+
+## Pending: `speed2` re-timing (prepared 2026-11-15, not yet run; GPU ~90 min)
+
+The mock reviews of the revised paper found that `TorchBatchGMM_fast`/`_graph` read the convergence test only
+every 5 iterations and so execute up to 4 extra iterations (the graph variant also runs one discarded warm-up
+iteration). The paper currently reports measured speedups plus a conservative estimate for a check every
+iteration (`paper_results._adjust_check_interval`). To replace the estimate with measurements:
+
+    python experiments/next/run_next.py --stages speed2      # -> speed2_dev.csv, speed2_holdout.csv, speed2_large.csv
+
+Adds `_fast1`/`_graph1` (check every iteration), logs executed iterations and GPU clock/temperature/power per
+(dataset, seed), an `EGMM_f64` run on full-covariance development datasets (float32 vs float64 training), and
+at large N full-data-seeded batch EM (`TorchBatchGMM_fullinit`) and budget curves (`TorchBatchGMM_it{2..20}`,
+`EGMM_e{1,3}`) for time-to-quality comparisons. Afterwards: point `paper_results.py` at the speed2 CSVs for
+the time reference (fastest of eager, fast, fast1, graph, graph1), drop the estimate, and add the budget curves.
+Smoke test: `CUDA_VISIBLE_DEVICES=-1 python experiments/next/run_next.py --stages speed2 --smoke --device cpu`.
 
 ## Runtime estimate (RTX 5070)
 

@@ -18,7 +18,10 @@ control `TorchBatchGMM_f32chol` on near-singular holdout data (recorded, exclude
 * **Implication:** on small and medium datasets the paper's 2.5x speedup is an engineering effect that a
   graph-captured batch EM erases. The defensible speed claim is at N > 1e5, where e-GMM's ~4x fewer data
   passes give 2.5x-22x over the best batch EM, with equal or better NLL (large: 6/2/0).
-* Quality is unchanged by the baseline variants (they reach the same likelihoods up to float32 Cholesky).
+* The sync-free and graph variants factorize covariances in float32, so on real data their NLL differs from
+  `TorchBatchGMM`'s beyond the 1e-3 tie band on some datasets, in both directions (graph vs eager W/T/L:
+  development 4/24/5, holdout 8/5/3; neither significant). Quality comparisons therefore use the fastest
+  variant's own NLL (development 24/0/9, holdout 10/0/6, large N 6/2/0 for e-GMM).
 
 ## 2. CUDA graph vs algorithm (decomposition)
 * Removing the per-step alpha sync from eager e-GMM changes the graph factor only from 1.79x to 1.75x

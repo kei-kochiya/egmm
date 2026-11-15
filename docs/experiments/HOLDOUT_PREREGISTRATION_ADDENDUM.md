@@ -2,12 +2,12 @@
 
 `HOLDOUT_PREREGISTRATION.md` is left exactly as committed with the library freeze (commit `7d6b9c9`). This
 addendum records, without editing it, where the executed study departs from that text. The same list is in
-the paper (Section "Pre-Registered Fresh Holdout Suite", paragraph "Deviations from the pre-registration").
+the paper (Section "Pre-Registered Holdout", paragraph "Deviations from the pre-registration").
 
 1. **Two datasets were already cached.** The registration says the library was frozen "before any of the
    datasets below was downloaded". `eeg-eye-state` and `isolet` were already in the local OpenML cache from a
    dataset search on the day before registration. No fit or analysis of them exists in the repository before
-   the registration; the paper reports every holdout result also without them (Table 3, "Excl. pre-cached").
+   the registration; the paper reports every holdout result also without them (post-hoc robustness table, column "Excl. pre-cached").
    The accurate statement is: library code frozen and committed before any holdout dataset was fitted, and
    before 14 of the 16 were downloaded.
 2. **`dionis` was re-run.** The harness stopped on `dionis` when raw scikit-learn failed to fit (singular
@@ -19,3 +19,8 @@ the paper (Section "Pre-Registered Fresh Holdout Suite", paragraph "Deviations f
    named no primary hypothesis or equivalence margin, so the holdout supports out-of-sample estimation rather
    than a confirmatory test. Every exclusion in the paper's robustness table is a post-hoc sensitivity
    analysis next to the registered all-dataset analysis.
+5. **Post-hoc follow-up runs (added 2026-11-15, after this addendum).** The holdout was later re-timed against
+   stronger batch-EM baselines and used for three post-hoc ablations (`experiments/next/`, stage `holdout`;
+   library unchanged, NLLs identical to the registered runs). `volkert` and `isolet` were also used to diagnose
+   the diagonal-covariance losses. These analyses are labelled post hoc in the paper and are not part of the
+   registered evidence; `volkert` and `isolet` can no longer serve as unseen data for a diagonal-mode rule.

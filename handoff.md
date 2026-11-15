@@ -5,11 +5,15 @@ Repo `github.com/kei-kochiya/egmm`, branch `main`. This file is excluded from th
 
 ## Status (2026-11-15)
 
-* **Paper submitted to TMLR** (double-blind). Main text 12 pages (Sections 1-7); 26 pages with statements,
-  references, appendices A-D. Results are ordered holdout first.
-* **arXiv preprint** built in `dist/arxiv/` (25 pages, non-anonymous); waiting for arXiv endorsement (cs.LG).
-* Four rounds of mock review (12 reviewer agents): last verdicts "leaning accept"; no open critical issue.
-  Private reviewer Q&A and submission checklist: `docs/submission/`.
+* **Paper submitted to TMLR** (double-blind, Long submission) on 2026-11-15; the submitted version is kept
+  privately in `docs/submission/submitted_tmlr_2026-11-15/` (source commit 80ee180).
+* **Revised version in `paper/` (not uploaded to OpenReview; the author decides when).** It adds stronger
+  batch-EM baselines, 8 datasets with 1-10M rows, schedule/revival ablations and the review.txt text fixes
+  (Section 5.3, Appendix E). Main text now ends on p.14 (Long submission, so no 12-page limit; do not bloat).
+  Five rounds of mock review so far; the last (3 reviewers on the revision) were all "leaning accept,
+  conditional", and their text-level issues are fixed.
+* **arXiv preprint** built in `dist/arxiv/` from the submitted version; waiting for endorsement (cs.LG).
+  Rebuild it from the revision before uploading.
 
 ## Hard rules
 
@@ -54,7 +58,7 @@ pytest -q                                                    # 51 tests, incl. C
 python experiments/run_benchmark_suite.py --stages sys       # ~40 min; h2h ~75 min (CPU sklearn)
 python experiments/analyze_results.py && python experiments/verify_tables.py
 python experiments/plot_results.py && cp docs/experiments/fig_*.png paper/figures/
-cd paper && tectonic -X compile main.tex                     # this machine: tectonic.exe under ~/.gemini/antigravity/.../scratch/tectonic/
+cd paper && tectonic -X compile main.tex                     # this machine: C:/Users/Admin/tools/tectonic/tectonic.exe (0.15.0)
 python experiments/make_supplementary.py                     # -> dist/supplementary_anonymized.zip
 TECTONIC=/path/to/tectonic python paper/make_arxiv.py        # -> dist/arxiv/ (preprint PDF + source ZIP)
 ```
@@ -68,25 +72,29 @@ Full reproduction order and runtimes: `ENVIRONMENT.md`; exact versions: `require
 | Holdout (16, frozen code) | 9/0/7, p = 1.0, 2.5x faster; losses 3.8-5.4 nats on 3 datasets | 8/0/8, p = 1.0, 37x (~15x is GPU vs CPU) | 13/0/3, p = 0.012 (12/0/4 n.s. without polish) |
 | Development (33) | 24/0/9, p = 7.6e-4, 2.35x | 21/0/12, p = 0.29, 32.5x | 26/1/6 |
 
-Speed split (systems run): CUDA graph 1.95x, algorithm 1.26x, total 2.54x; N <= 1e5 graph 2.04x / algorithm
-1.12x, N > 1e5 graph 1.57x / algorithm 2.11x. Batch EM's float64 Cholesky is not the cause (control ratio 1.00).
-Positioning: as accurate as batch EM on unseen data, faster; not a more accurate optimizer.
+Speed split (systems run): CUDA graph 1.95x, algorithm 1.26x, total 2.54x. **Revision (follow-up runs,
+`docs/experiments/next/`):** against a CUDA-graph-captured batch EM, e-GMM is about as fast at N <= 1e5
+(1.06x dev, 1.00x holdout) and faster above (dev N > 1e5: 2.52x measured, >= 2.36x estimated; 1-10M rows:
+median 3.2x measured, >= 2.9x estimated, 1.3-22x; HIGGS 20x, SUSY 22x, both to batch EM's default stopping rule).
+Quality is always compared with float64 `TorchBatchGMM` (the faster variants use float32 Cholesky).
+Positioning: as accurate as batch EM on unseen data; faster only at large N; not a more accurate optimizer.
 
 ## Open items
 
-1. **Next version (in progress): `experiments/next/`** (plan, protocol and decision rules in its README).
-   Stronger batch-EM baselines (`TorchBatchGMM_fast`, sync-light; `TorchBatchGMM_graph`, CUDA-graph
-   captured; both checked against `TorchBatchGMM` by `tests/test_next_baselines.py`), a large-N suite
-   (synthetic 1M/3M/10M rows; real HIGGS/SUSY only if the author downloads them into `data/large/`), and
-   best-of-R restarts at equal compute. Run `run_next.py --stages dev,holdout,diag,large` (GPU, ~3-3.5 h), then
-   `analyze_next.py`. Results are development evidence; a restarts claim needs a new pre-registered holdout.
+1. **Pending GPU run (author said "run it later"):** `python experiments/next/run_next.py --stages speed2`
+   (~90 min) replaces the check-interval *estimate* with measurements and adds full-data-seeded batch EM,
+   batch-EM/e-GMM budget curves at large N and an e-GMM float64 check (see `experiments/next/README.md`).
+   Then point `paper_results.py` at the speed2 CSVs and update Section 5.3 / Appendix E.
+   Still open from the mock reviews (need runs or are optional): schedule ablation at large N and on the
+   holdout, a tuned Robbins-Monro alternative, more real large datasets / K / D, peak memory, naming table.
 2. Other plausible requests: external GPU GMM library comparison (needs a package install, ask first),
    another GPU/OS, peak memory, sensitivity to K.
 3. arXiv: after endorsement upload `dist/arxiv/egmm_arxiv_source.zip`; authors field "Tuan Khoi Ho";
    license CC BY; cs.LG + stat.ML cross-list.
 4. After the review: library hardening (license is the author's choice; packaging, input validation, docs,
-   CI; no numerics changes); follow-up paper on "better than batch EM" (equal-compute restarts,
-   convergence-aware polish) with a second pre-registered holdout.
+   CI; no numerics changes); follow-up paper on "better than batch EM" (restarts, convergence-aware polish,
+   an alpha_0 guard for diagonal mode) with a second pre-registered holdout that states a primary hypothesis
+   and margin and uses a public timestamp (OSF/Zenodo).
 
 ## Pitfalls
 
@@ -96,3 +104,6 @@ Positioning: as accurate as batch EM on unseen data, faster; not a more accurate
 * GPU timings drift between sessions (per-dataset speedups up to 2x, absolute times up to ~3x); compare
   methods only within one interleaved session.
 * Set `PYTHONIOENCODING=utf-8` when printing PDF text on the Windows console.
+* `CUDA_VISIBLE_DEVICES=""` does not hide the GPU on Windows; use `-1` for CPU-only runs.
+* Revision numbers live in `experiments/next/paper_results.py` (called by `analyze_results.py`); the speed
+  figure comes from `experiments/next/plot_speed.py` (copy the PNG to `paper/figures/`).
