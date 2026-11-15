@@ -78,7 +78,7 @@ Positioning: as accurate as batch EM on unseen data, faster; not a more accurate
    Stronger batch-EM baselines (`TorchBatchGMM_fast`, sync-light; `TorchBatchGMM_graph`, CUDA-graph
    captured; both checked against `TorchBatchGMM` by `tests/test_next_baselines.py`), a large-N suite
    (synthetic 1M/3M/10M rows; real HIGGS/SUSY only if the author downloads them into `data/large/`), and
-   best-of-R restarts at equal compute. Run `run_next.py --stages dev,holdout,diag,large` (GPU, ~2-2.5 h), then
+   best-of-R restarts at equal compute. Run `run_next.py --stages dev,holdout,diag,large` (GPU, ~3-3.5 h), then
    `analyze_next.py`. Results are development evidence; a restarts claim needs a new pre-registered holdout.
 2. Other plausible requests: external GPU GMM library comparison (needs a package install, ask first),
    another GPU/OS, peak memory, sensitivity to K.

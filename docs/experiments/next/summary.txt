@@ -1,0 +1,241 @@
+Next-version experiments (development analyses; see experiments/next/README.md)
+
+##### stage dev: 33 datasets, 1287 fits
+
+=== dev: e-GMM (single start) vs batch EM variants (Holm within this block; raw in brackets) ===
+EGMM_r0 vs TorchBatchGMM            n=33 W/T/L=24/0/9 med_dNLL=-0.3346 p=0.0006326 [0.0001888] | med_spd=2.58x (faster on 32/33) p_time=2.794e-09
+EGMM_r0 vs TorchBatchGMM_f32chol    n=33 W/T/L=24/0/9 med_dNLL=-0.3346 p=0.0006326 [0.0001729] | med_spd=2.63x (faster on 32/33) p_time=3.492e-09
+EGMM_r0 vs TorchBatchGMM_fast       n=33 W/T/L=24/0/9 med_dNLL=-0.3346 p=0.0006326 [0.0001582] | med_spd=2.59x (faster on 32/33) p_time=3.492e-09
+EGMM_r0 vs TorchBatchGMM_graph      n=33 W/T/L=24/0/9 med_dNLL=-0.3346 p=0.0006326 [0.0001582] | med_spd=1.22x (faster on 21/33) p_time=0.002233
+
+=== dev: batch EM variants (Holm within this block; raw in brackets) ===
+TorchBatchGMM_graph vs TorchBatchGMM            n=33 W/T/L=4/24/5 med_dNLL=+0.0000 p=0.2876 [0.2876] | med_spd=1.81x (faster on 29/33) p_time=1.436e-05
+TorchBatchGMM_graph vs TorchBatchGMM_fast       n=33 W/T/L=0/33/0 med_dNLL=+0.0000 p=nan [nan] | med_spd=1.64x (faster on 29/33) p_time=8.789e-06
+
+=== dev: CUDA graph effect (with and without the per-step alpha sync) (Holm within this block; raw in brackets) ===
+EGMM_r0 vs EGMM_eager               n=33 W/T/L=0/33/0 med_dNLL=+0.0000 p=nan [nan] | med_spd=1.79x (faster on 33/33) p_time=4.657e-10
+EGMM_r0 vs EGMM_eager_hostalpha     n=33 W/T/L=0/33/0 med_dNLL=+0.0000 p=nan [nan] | med_spd=1.75x (faster on 33/33) p_time=4.657e-10
+
+=== dev: algorithm alone (sync-free eager e-GMM vs batch EM variants) (Holm within this block; raw in brackets) ===
+EGMM_eager_hostalpha vs TorchBatchGMM            n=33 W/T/L=24/0/9 med_dNLL=-0.3346 p=0.0006326 [0.0001888] | med_spd=1.41x (faster on 25/33) p_time=0.0008707
+EGMM_eager_hostalpha vs TorchBatchGMM_f32chol    n=33 W/T/L=24/0/9 med_dNLL=-0.3346 p=0.0006326 [0.0001729] | med_spd=1.31x (faster on 24/33) p_time=0.0008767
+EGMM_eager_hostalpha vs TorchBatchGMM_fast       n=33 W/T/L=24/0/9 med_dNLL=-0.3346 p=0.0006326 [0.0001582] | med_spd=1.25x (faster on 27/33) p_time=0.0006326
+EGMM_eager_hostalpha vs TorchBatchGMM_graph      n=33 W/T/L=24/0/9 med_dNLL=-0.3346 p=0.0006326 [0.0001582] | med_spd=0.61x (faster on 13/33) p_time=0.8462
+
+=== dev: single-factor schedule ablation (cosine vs Robbins-Monro / constant) (Holm within this block; raw in brackets) ===
+EGMM_r0 vs EGMM_sched_rm            n=33 W/T/L=26/1/6 med_dNLL=-0.1339 p=0.005459 [0.00273] | med_spd=0.99x (faster on 13/33) p_time=0.2601
+EGMM_r0 vs EGMM_sched_const         n=33 W/T/L=23/0/10 med_dNLL=-0.0215 p=0.009303 [0.009303] | med_spd=1.00x (faster on 17/33) p_time=0.8462
+
+=== dev: best-of-R restarts (R = 1..4) ===
+  best-of-1 (lb) vs TorchBatchGMM          W/T/L=24/0/9 med_dNLL=-0.3346 raw p=0.0001888 | median time ratio base/restarts=2.58x
+  best-of-2 (lb) vs TorchBatchGMM          W/T/L=31/0/2 med_dNLL=-0.5298 raw p=2.489e-07 | median time ratio base/restarts=1.29x
+  best-of-3 (lb) vs TorchBatchGMM          W/T/L=30/0/3 med_dNLL=-0.5857 raw p=3.453e-07 | median time ratio base/restarts=0.86x
+  best-of-4 (lb) vs TorchBatchGMM          W/T/L=29/0/4 med_dNLL=-0.6123 raw p=7.169e-06 | median time ratio base/restarts=0.65x
+  best-of-1 (val) vs TorchBatchGMM          W/T/L=24/0/9 med_dNLL=-0.3346 raw p=0.0001888 | median time ratio base/restarts=2.58x
+  best-of-2 (val) vs TorchBatchGMM          W/T/L=30/0/3 med_dNLL=-0.3669 raw p=3.874e-06 | median time ratio base/restarts=1.29x
+  best-of-3 (val) vs TorchBatchGMM          W/T/L=30/1/2 med_dNLL=-0.5940 raw p=1.49e-07 | median time ratio base/restarts=0.86x
+  best-of-4 (val) vs TorchBatchGMM          W/T/L=30/0/3 med_dNLL=-0.6008 raw p=8.075e-06 | median time ratio base/restarts=0.65x
+  best-of-1 (lb) vs TorchBatchGMM_graph    W/T/L=24/0/9 med_dNLL=-0.3346 raw p=0.0001582 | median time ratio base/restarts=1.22x
+  best-of-2 (lb) vs TorchBatchGMM_graph    W/T/L=31/0/2 med_dNLL=-0.4845 raw p=2.105e-07 | median time ratio base/restarts=0.62x
+  best-of-3 (lb) vs TorchBatchGMM_graph    W/T/L=30/0/3 med_dNLL=-0.5857 raw p=3.453e-07 | median time ratio base/restarts=0.41x
+  best-of-4 (lb) vs TorchBatchGMM_graph    W/T/L=29/0/4 med_dNLL=-0.6071 raw p=5.629e-06 | median time ratio base/restarts=0.30x
+  best-of-1 (val) vs TorchBatchGMM_graph    W/T/L=24/0/9 med_dNLL=-0.3346 raw p=0.0001582 | median time ratio base/restarts=1.22x
+  best-of-2 (val) vs TorchBatchGMM_graph    W/T/L=30/0/3 med_dNLL=-0.3669 raw p=3.41e-06 | median time ratio base/restarts=0.62x
+  best-of-3 (val) vs TorchBatchGMM_graph    W/T/L=30/1/2 med_dNLL=-0.5940 raw p=1.49e-07 | median time ratio base/restarts=0.41x
+  best-of-4 (val) vs TorchBatchGMM_graph    W/T/L=30/0/3 med_dNLL=-0.5566 raw p=6.357e-06 | median time ratio base/restarts=0.30x
+
+=== dev: equal compute ===
+  equal compute vs TorchBatchGMM          (lb selection): mean R=2.30 (R=1 on 7/33 datasets) W/T/L=31/0/2 med_dNLL=-0.4651 raw p=2.489e-07
+  equal compute vs TorchBatchGMM          (val selection): mean R=2.30 (R=1 on 7/33 datasets) W/T/L=30/1/2 med_dNLL=-0.4651 raw p=2.489e-07
+  equal compute vs TorchBatchGMM_fast     (lb selection): mean R=2.13 (R=1 on 9/33 datasets) W/T/L=30/0/3 med_dNLL=-0.3669 raw p=1.003e-06
+  equal compute vs TorchBatchGMM_fast     (val selection): mean R=2.13 (R=1 on 9/33 datasets) W/T/L=29/1/3 med_dNLL=-0.3669 raw p=1.003e-06
+  equal compute vs TorchBatchGMM_graph    (lb selection): mean R=1.57 (R=1 on 23/33 datasets) W/T/L=27/0/6 med_dNLL=-0.3571 raw p=1.793e-05
+  equal compute vs TorchBatchGMM_graph    (val selection): mean R=1.57 (R=1 on 23/33 datasets) W/T/L=26/1/6 med_dNLL=-0.3571 raw p=1.605e-05
+  library n_init=3 time / sum of 3 single fits: median 0.94
+[holdout] FAILED: TorchBatchGMM_f32chol on eye_movements seed 1: _LinAlgError('linalg.cholesky: (Batch element 6): The factorization could not be completed because the input is not positive-definite (the leading minor of order 24 is not positive-definite).')
+[holdout] FAILED: TorchBatchGMM_f32chol on eeg_eye_state seed 0: _LinAlgError('linalg.cholesky: (Batch element 1): The factorization could not be completed because the input is not positive-definite (the leading minor of order 11 is not positive-definite).')
+[holdout] FAILED: TorchBatchGMM_f32chol on dionis seed 0: _LinAlgError('linalg.cholesky: (Batch element 15): The factorization could not be completed because the input is not positive-definite (the leading minor of order 44 is not positive-definite).')
+
+##### stage holdout: 16 datasets, 477 fits
+
+=== holdout: e-GMM (single start) vs batch EM variants (Holm within this block; raw in brackets) ===
+EGMM_r0 vs TorchBatchGMM            n=16 W/T/L=9/0/7 med_dNLL=-0.1361 p=0.5261 [0.4332] | med_spd=3.10x (faster on 16/16) p_time=0.0001221
+EGMM_r0 vs TorchBatchGMM_f32chol    n=16 W/T/L=10/0/6 med_dNLL=-0.5078 p=0.5189 [0.1297] | med_spd=2.87x (faster on 16/16) p_time=0.0001221
+EGMM_r0 vs TorchBatchGMM_fast       n=16 W/T/L=10/0/6 med_dNLL=-0.5109 p=0.5261 [0.1754] | med_spd=2.73x (faster on 15/16) p_time=0.0001221
+EGMM_r0 vs TorchBatchGMM_graph      n=16 W/T/L=10/0/6 med_dNLL=-0.5109 p=0.5261 [0.1754] | med_spd=1.03x (faster on 9/16) p_time=0.4954
+
+=== holdout: batch EM variants (Holm within this block; raw in brackets) ===
+TorchBatchGMM_graph vs TorchBatchGMM            n=16 W/T/L=8/5/3 med_dNLL=-0.0230 p=0.1272 [0.1272] | med_spd=2.92x (faster on 16/16) p_time=6.104e-05
+TorchBatchGMM_graph vs TorchBatchGMM_fast       n=16 W/T/L=0/16/0 med_dNLL=+0.0000 p=nan [nan] | med_spd=2.49x (faster on 15/16) p_time=9.155e-05
+
+=== holdout: CUDA graph effect (with and without the per-step alpha sync) (Holm within this block; raw in brackets) ===
+EGMM_r0 vs EGMM_eager               n=16 W/T/L=0/16/0 med_dNLL=+0.0000 p=nan [nan] | med_spd=2.37x (faster on 16/16) p_time=6.104e-05
+EGMM_r0 vs EGMM_eager_hostalpha     n=16 W/T/L=0/16/0 med_dNLL=+0.0000 p=nan [nan] | med_spd=2.35x (faster on 16/16) p_time=6.104e-05
+
+=== holdout: algorithm alone (sync-free eager e-GMM vs batch EM variants) (Holm within this block; raw in brackets) ===
+EGMM_eager_hostalpha vs TorchBatchGMM            n=16 W/T/L=9/0/7 med_dNLL=-0.1361 p=0.5261 [0.4332] | med_spd=1.30x (faster on 14/16) p_time=0.008545
+EGMM_eager_hostalpha vs TorchBatchGMM_f32chol    n=16 W/T/L=10/0/6 med_dNLL=-0.5078 p=0.5189 [0.1297] | med_spd=1.13x (faster on 13/16) p_time=0.03296
+EGMM_eager_hostalpha vs TorchBatchGMM_fast       n=16 W/T/L=10/0/6 med_dNLL=-0.5109 p=0.5261 [0.1754] | med_spd=1.12x (faster on 13/16) p_time=0.03296
+EGMM_eager_hostalpha vs TorchBatchGMM_graph      n=16 W/T/L=10/0/6 med_dNLL=-0.5109 p=0.5261 [0.1754] | med_spd=0.44x (faster on 2/16) p_time=0.03296
+
+=== holdout: online EM with matched polish, and revival (post hoc) (Holm within this block; raw in brackets) ===
+EGMM_r0 vs OnlineGMM_tuned          n=16 W/T/L=13/0/3 med_dNLL=-1.1173 p=0.005035 [0.001678] | med_spd=0.87x (faster on 4/16) p_time=0.2595
+EGMM_r0 vs OnlineGMM_matched_polish n=16 W/T/L=11/0/5 med_dNLL=-0.4347 p=0.1046 [0.1046] | med_spd=1.02x (faster on 10/16) p_time=0.2595
+EGMM_r0 vs EGMM_no_revival          n=16 W/T/L=10/5/1 med_dNLL=-0.3494 p=0.03649 [0.01824] | med_spd=0.89x (faster on 1/16) p_time=0.0006409
+
+##### stage diag: 10 datasets, 210 fits
+
+=== diag: e-GMM (single start) vs batch EM variants (Holm within this block; raw in brackets) ===
+EGMM_r0 vs TorchBatchGMM            n=10 W/T/L=6/0/4 med_dNLL=-0.2991 p=1 [0.625] | med_spd=2.67x (faster on 9/10) p_time=0.007812
+EGMM_r0 vs TorchBatchGMM_graph      n=10 W/T/L=6/0/4 med_dNLL=-0.2991 p=1 [0.625] | med_spd=0.99x (faster on 5/10) p_time=1
+
+=== diag: batch EM variants (Holm within this block; raw in brackets) ===
+TorchBatchGMM_graph vs TorchBatchGMM            n=10 W/T/L=1/8/1 med_dNLL=+0.0000 p=0.75 [0.75] | med_spd=2.86x (faster on 10/10) p_time=0.001953
+
+=== diag: test NLL relative to default e-GMM (EGMM_r0), 3-seed means; negative = variant better ===
+dataset                      regime       EGMM_polish0      EGMM_a085      EGMM_ep2x     EGMM_notol  TorchBatchGMM TorchBatchGMM_
+volkert                      holdout           +27.335         -2.137         -2.086         +0.000         -5.385         -5.450
+isolet                       holdout           +54.301         -9.388         -2.047         +0.000         -3.753         -3.753
+gas_drift                    real_highd         +4.203         -1.210         -0.472         +0.000         +0.762         +0.762
+philippine                   real_highd         +2.287         -2.102         -0.586         +0.000         +1.831         +1.831
+har                          real_highd        +10.060         -5.506         +2.350         +0.000         +0.583         +0.583
+miniboone                    real_large         +1.153         -0.051         -0.158         +0.000         -0.345         -0.271
+spambase                     real_small         +1.616        +37.458        +12.696         +0.000        +48.097        +48.097
+syn_highdim128_50k           syn_highd          +0.064         -1.780         -1.905         +0.000         +0.816         +0.816
+syn_scale500k_diag           syn_large          +0.000         -0.003         -0.000         +0.000         +0.015         +0.015
+syn_scale400k_d256_diag      syn_large          +0.000         +0.004         +0.002         +0.000         -0.055         -0.055
+
+##### stage large: 8 datasets, 194 fits
+
+=== large: e-GMM (single start) vs batch EM variants (Holm within this block; raw in brackets) ===
+EGMM_r0 vs TorchBatchGMM            n= 8 W/T/L=6/2/0 med_dNLL=-0.4782 p=0.1562 [0.03906] | med_spd=5.26x (faster on 8/8) p_time=0.03125
+EGMM_r0 vs TorchBatchGMM_f32chol    n= 8 W/T/L=6/2/0 med_dNLL=-0.4782 p=0.1562 [0.03906] | med_spd=6.05x (faster on 8/8) p_time=0.03125
+EGMM_r0 vs TorchBatchGMM_fast       n= 8 W/T/L=6/2/0 med_dNLL=-0.4781 p=0.1562 [0.03906] | med_spd=4.80x (faster on 8/8) p_time=0.03125
+EGMM_r0 vs TorchBatchGMM_graph      n= 8 W/T/L=6/2/0 med_dNLL=-0.4781 p=0.1562 [0.03906] | med_spd=4.79x (faster on 8/8) p_time=0.03125
+
+=== large: batch EM variants (Holm within this block; raw in brackets) ===
+TorchBatchGMM_graph vs TorchBatchGMM            n= 8 W/T/L=0/8/0 med_dNLL=-0.0000 p=0.8438 [0.8438] | med_spd=1.11x (faster on 5/8) p_time=1
+TorchBatchGMM_graph vs TorchBatchGMM_fast       n= 8 W/T/L=0/8/0 med_dNLL=+0.0000 p=nan [nan] | med_spd=1.02x (faster on 4/8) p_time=1
+
+=== large: best-of-R restarts (R = 1..3) ===
+  best-of-1 (lb) vs TorchBatchGMM          W/T/L=6/2/0 med_dNLL=-0.4782 raw p=0.03906 | median time ratio base/restarts=5.26x
+  best-of-2 (lb) vs TorchBatchGMM          W/T/L=8/0/0 med_dNLL=-0.5777 raw p=0.007812 | median time ratio base/restarts=2.69x
+  best-of-3 (lb) vs TorchBatchGMM          W/T/L=8/0/0 med_dNLL=-0.6125 raw p=0.007812 | median time ratio base/restarts=1.80x
+  best-of-1 (val) vs TorchBatchGMM          W/T/L=6/2/0 med_dNLL=-0.4782 raw p=0.03906 | median time ratio base/restarts=5.26x
+  best-of-2 (val) vs TorchBatchGMM          W/T/L=8/0/0 med_dNLL=-0.5777 raw p=0.007812 | median time ratio base/restarts=2.69x
+  best-of-3 (val) vs TorchBatchGMM          W/T/L=8/0/0 med_dNLL=-0.6125 raw p=0.007812 | median time ratio base/restarts=1.80x
+  best-of-1 (lb) vs TorchBatchGMM_graph    W/T/L=6/2/0 med_dNLL=-0.4781 raw p=0.03906 | median time ratio base/restarts=4.79x
+  best-of-2 (lb) vs TorchBatchGMM_graph    W/T/L=8/0/0 med_dNLL=-0.5777 raw p=0.007812 | median time ratio base/restarts=2.42x
+  best-of-3 (lb) vs TorchBatchGMM_graph    W/T/L=8/0/0 med_dNLL=-0.6125 raw p=0.007812 | median time ratio base/restarts=1.60x
+  best-of-1 (val) vs TorchBatchGMM_graph    W/T/L=6/2/0 med_dNLL=-0.4781 raw p=0.03906 | median time ratio base/restarts=4.79x
+  best-of-2 (val) vs TorchBatchGMM_graph    W/T/L=8/0/0 med_dNLL=-0.5777 raw p=0.007812 | median time ratio base/restarts=2.42x
+  best-of-3 (val) vs TorchBatchGMM_graph    W/T/L=8/0/0 med_dNLL=-0.6125 raw p=0.007812 | median time ratio base/restarts=1.60x
+
+=== large: equal compute ===
+  equal compute vs TorchBatchGMM          (lb selection): mean R=2.88 (R=1 on 0/8 datasets) W/T/L=8/0/0 med_dNLL=-0.5777 raw p=0.007812
+  equal compute vs TorchBatchGMM          (val selection): mean R=2.88 (R=1 on 0/8 datasets) W/T/L=8/0/0 med_dNLL=-0.5777 raw p=0.007812
+  equal compute vs TorchBatchGMM_fast     (lb selection): mean R=2.79 (R=1 on 0/8 datasets) W/T/L=7/1/0 med_dNLL=-0.6125 raw p=0.01562
+  equal compute vs TorchBatchGMM_fast     (val selection): mean R=2.79 (R=1 on 0/8 datasets) W/T/L=7/1/0 med_dNLL=-0.6125 raw p=0.01562
+  equal compute vs TorchBatchGMM_graph    (lb selection): mean R=2.54 (R=1 on 1/8 datasets) W/T/L=7/1/0 med_dNLL=-0.6125 raw p=0.01562
+  equal compute vs TorchBatchGMM_graph    (val selection): mean R=2.54 (R=1 on 1/8 datasets) W/T/L=7/1/0 med_dNLL=-0.6125 raw p=0.01562
+  library n_init=3 time / sum of 3 single fits: median 0.90
+
+=== Large-N: per-dataset 3-seed means (time in s; NLL) ===
+syn1m_full (N=999999, D=32, K=32, full)
+    EGMM_n3                  time=    0.806s  NLL=+48.9788
+    EGMM_r0                  time=    0.304s  NLL=+49.1255
+    EGMM_r1                  time=    0.279s  NLL=+49.1518
+    EGMM_r2                  time=    0.303s  NLL=+49.1098
+    StdSklearnGMM            time=  173.082s  NLL=+50.1581
+    TorchBatchGMM            time=    0.865s  NLL=+49.6067
+    TorchBatchGMM_f32chol    time=    0.875s  NLL=+49.6067
+    TorchBatchGMM_fast       time=    1.189s  NLL=+49.6067
+    TorchBatchGMM_graph      time=    1.308s  NLL=+49.6067
+    speedup EGMM_r0 vs TorchBatchGMM: 2.85x, dNLL=-0.4811
+    speedup EGMM_r0 vs TorchBatchGMM_graph: 4.31x, dNLL=-0.4811
+    speedup EGMM_r0 vs TorchBatchGMM_fast: 3.91x, dNLL=-0.4811
+syn1m_diag (N=999999, D=64, K=32, diag)
+    EGMM_n3                  time=    0.226s  NLL=+94.5679
+    EGMM_r0                  time=    0.111s  NLL=+95.4738
+    EGMM_r1                  time=    0.108s  NLL=+95.9273
+    EGMM_r2                  time=    0.112s  NLL=+95.3225
+    StdSklearnGMM            time=   43.482s  NLL=+94.8735
+    TorchBatchGMM            time=    0.606s  NLL=+95.4733
+    TorchBatchGMM_f32chol    time=    0.606s  NLL=+95.4733
+    TorchBatchGMM_fast       time=    0.348s  NLL=+95.4733
+    TorchBatchGMM_graph      time=    0.164s  NLL=+95.4733
+    speedup EGMM_r0 vs TorchBatchGMM: 5.45x, dNLL=+0.0005
+    speedup EGMM_r0 vs TorchBatchGMM_graph: 1.48x, dNLL=+0.0005
+    speedup EGMM_r0 vs TorchBatchGMM_fast: 3.13x, dNLL=+0.0005
+syn3m_full (N=2999999, D=32, K=32, full)
+    EGMM_n3                  time=    2.113s  NLL=+49.1050
+    EGMM_r0                  time=    0.756s  NLL=+49.1908
+    EGMM_r1                  time=    0.778s  NLL=+49.1332
+    EGMM_r2                  time=    0.781s  NLL=+49.1816
+    TorchBatchGMM            time=    2.986s  NLL=+49.7380
+    TorchBatchGMM_f32chol    time=    3.088s  NLL=+49.7380
+    TorchBatchGMM_fast       time=    3.598s  NLL=+49.7380
+    TorchBatchGMM_graph      time=    3.984s  NLL=+49.7380
+    speedup EGMM_r0 vs TorchBatchGMM: 3.95x, dNLL=-0.5472
+    speedup EGMM_r0 vs TorchBatchGMM_graph: 5.27x, dNLL=-0.5472
+    speedup EGMM_r0 vs TorchBatchGMM_fast: 4.76x, dNLL=-0.5472
+syn3m_diag (N=2999999, D=64, K=32, diag)
+    EGMM_n3                  time=    0.429s  NLL=+95.0374
+    EGMM_r0                  time=    0.233s  NLL=+95.7625
+    EGMM_r1                  time=    0.219s  NLL=+95.8998
+    EGMM_r2                  time=    0.216s  NLL=+95.9472
+    TorchBatchGMM            time=    1.183s  NLL=+95.7617
+    TorchBatchGMM_f32chol    time=    1.551s  NLL=+95.7617
+    TorchBatchGMM_fast       time=    0.910s  NLL=+95.7617
+    TorchBatchGMM_graph      time=    0.499s  NLL=+95.7617
+    speedup EGMM_r0 vs TorchBatchGMM: 5.06x, dNLL=+0.0008
+    speedup EGMM_r0 vs TorchBatchGMM_graph: 2.14x, dNLL=+0.0008
+    speedup EGMM_r0 vs TorchBatchGMM_fast: 3.90x, dNLL=+0.0008
+susy (N=3500000, D=18, K=32, full)
+    EGMM_n3                  time=    1.659s  NLL=-2.7453
+    EGMM_r0                  time=    0.586s  NLL=-2.6977
+    EGMM_r1                  time=    0.584s  NLL=-2.8451
+    EGMM_r2                  time=    0.589s  NLL=-2.7188
+    TorchBatchGMM            time=   15.158s  NLL=-2.2224
+    TorchBatchGMM_f32chol    time=   15.992s  NLL=-2.2225
+    TorchBatchGMM_fast       time=   13.801s  NLL=-2.2226
+    TorchBatchGMM_graph      time=   13.139s  NLL=-2.2226
+    speedup EGMM_r0 vs TorchBatchGMM: 25.85x, dNLL=-0.4753
+    speedup EGMM_r0 vs TorchBatchGMM_graph: 22.41x, dNLL=-0.4751
+    speedup EGMM_r0 vs TorchBatchGMM_fast: 23.54x, dNLL=-0.4751
+higgs (N=7699999, D=28, K=32, full)
+    EGMM_n3                  time=    4.231s  NLL=+11.8483
+    EGMM_r0                  time=    1.579s  NLL=+11.8483
+    EGMM_r1                  time=    1.615s  NLL=+12.1317
+    EGMM_r2                  time=    1.559s  NLL=+12.9414
+    TorchBatchGMM            time=   34.450s  NLL=+15.9243
+    TorchBatchGMM_f32chol    time=   35.114s  NLL=+15.9243
+    TorchBatchGMM_fast       time=   31.873s  NLL=+15.9243
+    TorchBatchGMM_graph      time=   32.070s  NLL=+15.9243
+    speedup EGMM_r0 vs TorchBatchGMM: 21.82x, dNLL=-4.0759
+    speedup EGMM_r0 vs TorchBatchGMM_graph: 20.31x, dNLL=-4.0759
+    speedup EGMM_r0 vs TorchBatchGMM_fast: 20.18x, dNLL=-4.0759
+syn10m_full (N=9999999, D=32, K=32, full)
+    EGMM_n3                  time=    6.538s  NLL=+48.9764
+    EGMM_r0                  time=    2.376s  NLL=+49.1216
+    EGMM_r1                  time=    2.322s  NLL=+49.2288
+    EGMM_r2                  time=    2.333s  NLL=+49.1044
+    TorchBatchGMM            time=    8.286s  NLL=+50.3112
+    TorchBatchGMM_f32chol    time=    8.330s  NLL=+50.3112
+    TorchBatchGMM_fast       time=   11.491s  NLL=+50.3112
+    TorchBatchGMM_graph      time=   12.686s  NLL=+50.3112
+    speedup EGMM_r0 vs TorchBatchGMM: 3.49x, dNLL=-1.1896
+    speedup EGMM_r0 vs TorchBatchGMM_graph: 5.34x, dNLL=-1.1896
+    speedup EGMM_r0 vs TorchBatchGMM_fast: 4.84x, dNLL=-1.1896
+syn10m_diag (N=9999999, D=48, K=32, diag)
+    EGMM_n3                  time=    1.296s  NLL=+71.8055
+    EGMM_r0                  time=    0.644s  NLL=+71.8085
+    EGMM_r1                  time=    0.646s  NLL=+72.1501
+    EGMM_r2                  time=    0.644s  NLL=+72.5326
+    TorchBatchGMM            time=    6.295s  NLL=+71.8096
+    TorchBatchGMM_f32chol    time=    6.402s  NLL=+71.8096
+    TorchBatchGMM_fast       time=    4.474s  NLL=+71.8096
+    TorchBatchGMM_graph      time=    1.875s  NLL=+71.8096
+    speedup EGMM_r0 vs TorchBatchGMM: 9.77x, dNLL=-0.0011
+    speedup EGMM_r0 vs TorchBatchGMM_graph: 2.91x, dNLL=-0.0011
+    speedup EGMM_r0 vs TorchBatchGMM_fast: 6.95x, dNLL=-0.0011
