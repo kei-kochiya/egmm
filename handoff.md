@@ -2,8 +2,10 @@
 
 **Repository:** `https://github.com/kei-kochiya/egmm` (branch `main`)  
 **Workspace:** `d:\nckh`  
-**Target Venue:** *Transactions on Machine Learning Research (TMLR)* (single-column format in `paper/main.tex`, compiled to `paper/main.pdf`).  
-**Current Verification Status:** All 34 unit tests pass (`$env:PYTHONPATH="src"; pytest -v` $\to$ `34 passed`), 33-dataset primary benchmark (3 seeds $\times$ 7 methods), 5 controlled fairness ablations, 8-dataset cold/warm CUDA Graph runtime phase breakdown, 6 Pareto compute-budget sweeps, and 16-dataset zero-shot small benchmark are complete and committed in `docs/experiments/`.
+**Target Venue:** *Transactions on Machine Learning Research (TMLR)* (single-column format in `paper/main.tex`, compiled to `paper/main.pdf`, 15 pages, zero `Overfull \hbox` warnings).  
+**Author:** Ho Tuan Khoi (`25520893@gm.uit.edu.vn`), Faculty of Computer Science, University of Information Technology (UIT), VNU-HCM, Vietnam.  
+**Current Verification Status:** All 34 unit tests pass (`$env:PYTHONPATH="src"; pytest -v` $\to$ `34 passed`), 33-dataset primary benchmark (3 seeds $\times$ 7 methods), 5 controlled fairness ablations (6 pairwise comparisons), 8-dataset cold/warm CUDA Graph runtime phase breakdown, 6 Pareto compute-budget sweeps, and 16-dataset zero-shot small benchmark are complete and committed in `docs/experiments/`. All verified items from the Round-1 review (`review.txt`) have been resolved in `paper/main.tex` and `paper/references.bib`.
+**Environment Note for AI Checkers:** This machine runs `Python 3.14.7`, `PyTorch 2.14.1+cu132` (NVIDIA RTX 3060 12GB), and `scikit-learn 1.9.1` on an `Intel Core i7-14700F` (20 cores, 28 threads) under Windows 11. These versions are real and verifiable via `python -c "import sys, torch, sklearn; print(sys.version, torch.__version__, sklearn.__version__)"`.
 
 ---
 
@@ -67,25 +69,26 @@ While the current codebase and TMLR manuscript are verified and statistically so
 
 ## 4. Prompt to Instruct the Next Reviewer / Research Agent
 
-Copy and paste the following prompt to start a fresh, adversarial TMLR review and improvement session:
+Copy and paste the following prompt to start a fresh, adversarial TMLR review, verification, and improvement session:
 
 ```text
 You are a strict TMLR Action Editor and lead ML systems researcher auditing the `e-GMM` repository in `d:\nckh` (`https://github.com/kei-kochiya/egmm`).
 
-Start by reading `handoff.md`, `paper/main.tex`, `docs/experiments/egmm_findings.md`, `docs/experiments/stats_summary.txt`, `src/egmm/{kernels,revival,scaling,estimator,baselines}.py`, and `experiments/{datasets,fit_scaling_laws,run_benchmark_suite,plot_results}.py`. Do not take any claim in `handoff.md` or `paper/main.tex` on trust—verify every mathematical statement, code path, and table entry directly against the source code and CSV files.
+Start by reading `handoff.md`, `paper/main.tex`, `paper/references.bib`, `docs/experiments/egmm_findings.md`, `docs/experiments/stats_summary.txt`, `src/egmm/{kernels,revival,scaling,estimator,baselines}.py`, and `experiments/{datasets,fit_scaling_laws,run_benchmark_suite,run_small_dataset_eval,plot_results}.py`. Do not take any claim in `handoff.md` or `paper/main.tex` on trust—verify every mathematical statement, code path, and table entry directly against the source code and `docs/experiments/*.csv` files. (Note: `Python 3.14.7`, `PyTorch 2.14.1+cu132`, and `scikit-learn 1.9.1` are the real installed versions on this machine; verify via `python -c "import sys, torch, sklearn; print(sys.version, torch.__version__, sklearn.__version__)"`.)
 
 Your objectives in priority order:
 
-1. **Strict TMLR Action Editor Audit:**
-   - Verify whether every claim in `paper/main.tex` (Proposition 1, Theorem 1 Wedderburn eigen-split, Section 2.2 `e-means` comparison, Section 3.3 degrees-of-freedom scaling law, and Section 5 tables/figures) is 100% accurate, convincingly supported by the CSVs, and free of hidden confounds.
+1. **Strict Code-to-Paper & CSV-to-Table Verification:**
+   - Cross-check every equation, proposition, theorem, and hyperparameter formula in `paper/main.tex` against `src/egmm/{kernels,revival,scaling,estimator,baselines}.py`.
+   - Cross-check every number, win/tie/loss count, Wilcoxon p-value, Friedman/Nemenyi statistic, and bolded entry in Tables 1–5 against `docs/experiments/{benchmark_head_to_head,benchmark_ablations,benchmark_runtime_breakdown,small_dataset_eval}.csv` and `docs/experiments/stats_summary.txt`.
    - Check `src/egmm/` and `experiments/` for any subtle bugs, numerical edge cases, or fairness gaps that could trigger a TMLR "Reject" or "Major Revision".
 
-2. **Investigate & Execute the High-Leverage Algorithmic Upgrades:**
-   - **Large-N Zero-Polish Tail Refinement ($N > 100\text{k}$):** On the 7 large-scale datasets (`polish_steps=0`), `EGMM` beats GPU `TorchBatchGMM` on 6/7 (`med dNLL = -1.0330`, `3.93x` faster) but trails 50-iter CPU `StandardizedSklearnGMM` on 4 synthetic mixtures (`med dNLL = +0.7294`). Test whether an `e-means`-style closing slow-EMA schedule (or lightweight subsampled closing refinement) closes this synthetic NLL gap on $N > 100\text{k}$ while keeping the $100\times+$ speedup over `StandardizedSklearnGMM`.
+2. **Investigate & Execute High-Leverage Algorithmic & Empirical Improvements (if verified to improve quality/speed without regressions):**
+   - **Large-N Zero-Polish Tail Refinement (`N > 100k`):** On the 7 large-scale datasets (`polish_steps=0`), `EGMM` beats GPU `TorchBatchGMM` on 6/7 (`med dNLL = -1.0330`, `3.93x` faster) but trails 50-iter CPU `StandardizedSklearnGMM` on 4 synthetic mixtures (`med dNLL = +0.7294`). Test whether an `e-means`-style closing slow-EMA schedule or lightweight subsampled closing refinement closes this synthetic NLL gap on `N > 100k` while preserving the `100x+` speedup over `StandardizedSklearnGMM`.
+   - **Single-Pass Host-to-Device Standardization on Ultra-High-D Diagonal (`syn_scale400k_d256_diag`):** On `syn_scale400k_d256_diag` (`N_train=280k, D=256, ND = 7.17e7 > 1.6e7`), `EGMM` wins by `-8.98` NLL and runs in `170–297 ms` standalone, but averages `508.1 ms` vs `TorchBatchGMM`'s `347.7 ms` (`0.68x`) in the 3-seed sweep because the out-of-core standardizer streams host `float64` chunks across PCIe in two passes (`2 x 573 MB`). Optimize this path so `EGMM` is faster on all 33/33 datasets.
    - **Smooth Continuous Scaling Laws (`scaling.py`):** Test whether the remaining piecewise sample-size brackets in `src/egmm/scaling.py` (`N < 15k, 100k`) can be replaced by smooth continuous laws in `(N, K, D)` without hurting holdout Wilcoxon rank or runtime.
-   - **Ultra-High-D Chunked Diagonal Speed (`syn_scale400k_d256_diag`):** Investigate why `EGMM` runs at `0.68x` the speed of `TorchBatchGMM` on `syn_scale400k_d256_diag` (while winning by `-8.98` NLL) and optimize the chunked diagonal E-step or epoch schedule so `EGMM` achieves $>1\times$ speedup without losing its NLL win.
-   - **Dispersion Metrics (`± std`):** Add multi-seed standard deviations (`± std`) or confidence intervals to the benchmark analysis and paper tables.
+   - **Dispersion Metrics (`± std`):** Add multi-seed standard deviations or IQR summaries to the analysis/tables where informative.
 
 3. **Verify, Recompile & Push:**
-   - Run `$env:PYTHONPATH="src"; pytest -v` (adding tests for every change), re-run affected benchmarks, regenerate figures, compile `paper/main.tex` locally with `tectonic`, visually inspect every page of `paper/main.pdf`, and push verified improvements to `origin main`.
+   - Run `$env:PYTHONPATH="src"; pytest -v` (adding tests for any code change), re-run affected benchmarks if code changed, compile `paper/main.tex` using `C:\Users\Admin\.gemini\antigravity\brain\fb848941-4675-400c-a0d5-95173799fb3c\scratch\tectonic\tectonic.exe -X compile paper/main.tex`, visually inspect rendered PDF pages (zero `Overfull \hbox`), update `handoff.md`, and commit & push to `origin main`.
 ```
