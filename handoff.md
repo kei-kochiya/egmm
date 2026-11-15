@@ -74,12 +74,14 @@ Positioning: as accurate as batch EM on unseen data, faster; not a more accurate
 
 ## Open items
 
-1. **Likely reviewer request:** a stronger batch-EM baseline (no per-iteration host syncs, convergence check
-   every k iterations, larger chunks; optionally CUDA-graph captured). About 2 h: subclass in
-   `experiments/`, add to the `sys` stage, plus a post-hoc holdout timing run. Expect the small-N speedup
-   to shrink; the N > 1e5 algorithmic gain should mostly remain.
+1. **Next version (in progress): `experiments/next/`** (plan, protocol and decision rules in its README).
+   Stronger batch-EM baselines (`TorchBatchGMM_fast`, sync-light; `TorchBatchGMM_graph`, CUDA-graph
+   captured; both checked against `TorchBatchGMM` by `tests/test_next_baselines.py`), a large-N suite
+   (synthetic 1M/3M/10M rows; real HIGGS/SUSY only if the author downloads them into `data/large/`), and
+   best-of-R restarts at equal compute. Run `run_next.py --stages dev,holdout,large` (GPU, ~2-2.5 h), then
+   `analyze_next.py`. Results are development evidence; a restarts claim needs a new pre-registered holdout.
 2. Other plausible requests: external GPU GMM library comparison (needs a package install, ask first),
-   larger N (1e6-1e7), another GPU/OS, peak memory, sensitivity to K.
+   another GPU/OS, peak memory, sensitivity to K.
 3. arXiv: after endorsement upload `dist/arxiv/egmm_arxiv_source.zip`; authors field "Tuan Khoi Ho";
    license CC BY; cs.LG + stat.ML cross-list.
 4. After the review: library hardening (license is the author's choice; packaging, input validation, docs,
