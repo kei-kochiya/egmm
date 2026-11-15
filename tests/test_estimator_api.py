@@ -163,9 +163,12 @@ def test_egmm_explicit_ablation_params_and_chunked_scoring(cov_type):
     # Verify chunked scoring produces identical results to unchunked scoring
     s_full = est.score_samples(X)
     p_full = est.predict_proba(X)
-    s_chunk = est._score_samples_chunked(X, max_work_elements=200)
-    p_chunk = est._predict_proba_chunked(X, max_work_elements=200)
-    np.testing.assert_allclose(s_chunk, s_full, rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(p_chunk, p_full, rtol=1e-5, atol=1e-5)
+    chunks = list(est._iter_weighted_log_prob(X, max_work_elements=200))
+    assert len(chunks) > 1
+    wlp = torch.cat([c[2] for c in chunks], dim=0)
+    s_chunk = torch.logsumexp(wlp, dim=1).numpy()
+    p_chunk = torch.softmax(wlp, dim=1).numpy()
+    np.testing.assert_allclose(s_chunk, s_full, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(p_chunk, p_full, rtol=1e-12, atol=1e-12)
 
 

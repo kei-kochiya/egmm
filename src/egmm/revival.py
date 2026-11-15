@@ -18,9 +18,11 @@ def revive_dead_components(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
     """Revive dead/starving components via vectorized high-variance donor eigen-splitting.
 
-    Preserves total mixture mass, mean, and second moment when dead components have zero mass,
-    avoiding boolean active-mask indexing and per-component cuSOLVER launches on CUDA by using
-    top-k donor pairing and float32 power iteration (exact batched ``eigh`` on CPU).
+    Preserves total mixture mass, mean, and second moment when dead components have zero mass.
+    Donors are paired via top-k on trace-weighted spread; on CUDA, full covariances use batched float32
+    power iteration (no per-component cuSOLVER ``eigh`` launches; exact batched ``eigh`` on CPU).
+    This operator runs *outside* the captured CUDA graph, only at the R_pts <= 4 scheduled checkpoints,
+    and performs a handful of small host synchronizations there (mass totals, dead/eligible counts).
     """
     K = M.shape[0]
     if K <= 1:

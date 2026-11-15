@@ -279,13 +279,15 @@ def plot_speedup_vs_nll(csv_path: Path, out_path: Path) -> None:
     n_total = len(pair_nll)
     n_diag = sum(1 for n in pair_nll.index if n in diag_sets)
     n_full = n_total - n_diag
-    n_qual_win = int((dnll <= 1e-3).sum())
+    n_qual_win = int((dnll < -1e-3).sum())
     n_speed_win = int((speedup > 1.0).sum())
+    n_strict = int(((dnll < -1e-3) & (speedup > 1.0)).sum())
 
     fig, ax = plt.subplots(figsize=(10.2, 6.2))
 
-    xlim = (0.56, 10.8)
-    ylim = (-19.0, 1.15)
+    # Data-driven limits (never clip a dataset), with the historical framing as the minimum extent.
+    xlim = (min(0.56, float(speedup.min()) * 0.85), max(10.8, float(speedup.max()) * 1.15))
+    ylim = (min(-19.0, float(dnll.min()) * 1.25), max(1.15, float(dnll.max()) * 1.25))
     ax.set_xscale("log")
     ax.set_yscale("symlog", linthresh=1.5, linscale=1.35)
     ax.set_xlim(*xlim)
@@ -377,7 +379,7 @@ def plot_speedup_vs_nll(csv_path: Path, out_path: Path) -> None:
     ax.text(
         xlim[1] * 0.92,
         -13.0,
-        f"Strictly Dominates\n(Faster & Better/Tied NLL)\n{n_qual_win}/{n_total} Quality | {n_speed_win}/{n_total} Speed",
+        f"Faster and lower NLL: {n_strict}/{n_total}\n(NLL wins {n_qual_win}/{n_total}; faster on {n_speed_win}/{n_total})",
         ha="right",
         va="center",
         fontsize=9.0,

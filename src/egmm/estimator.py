@@ -29,7 +29,26 @@ class EGMM(DensityMixin, BaseEstimator):
     Drop-in replacement for ``sklearn.mixture.GaussianMixture`` supporting CPU and CUDA
     with mini-batch EMA sufficient statistics, cosine decay, dead-component eigen-splitting,
     and automatic scaling-law hyperparameters.
+
+    Fitted-attribute semantics (where they differ from ``GaussianMixture``):
+
+    * ``n_iter_`` = number of EMA epochs actually started (``ceil(T / S_ep)``) + full-batch polish steps run.
+    * ``converged_`` is only set by the diagonal-covariance polish loop (|dLL| < ``tol`` checked every 3
+      polish steps); stochastic EMA training itself runs a fixed step budget and reports ``False``.
+    * ``lower_bound_`` is the mean training log-likelihood (original units) before the last polish M-step
+      when polish ran with ``n_init=1``; otherwise it is evaluated on a stride subsample of <= 65,536 rows.
+    * ``score``/``score_samples``/``predict``/``predict_proba``/``bic``/``aic`` are evaluated in float64.
     """
+
+    # Seeding: greedy k-means++ on n_seed = min(N, max(2048, 128 K)) points + 10 Lloyd steps
+    # (selected on validation NLL only; shared by every PyTorch baseline that inherits EGMM).
+    _SEED_MIN_POINTS = 2048
+    _SEED_POINTS_PER_COMPONENT = 128
+    _SEED_LLOYD_ITERS = 10
+    # Epoch / closing-polish budget law ("smooth" logistic gates in log N, or legacy "bracket").
+    _SCHEDULE_LAW = "smooth"
+    # Capture the inner EMA step in a CUDA graph on CUDA (tests flip this to compare with the eager path).
+    _USE_CUDA_GRAPH = True
 
     def __init__(
         self,
@@ -144,60 +163,76 @@ class EGMM(DensityMixin, BaseEstimator):
             X_std[st:en] = ((Xc - mean_64) * inv_std_64).to(dtype=target_dtype)
         return X_std
 
+    @staticmethod
+    def _device_cache_fits(n_bytes: int, device: torch.device) -> bool:
+        """Whether a one-shot device copy of ``n_bytes`` source data fits in a safe memory budget.
+
+        CPU tensors built via ``torch.from_numpy`` are zero-copy views, so CPU always fits. On CUDA we
+        allow the cached single-transfer path when the raw source occupies at most 40% of free memory.
+        """
+        if device.type != "cuda":
+            return True
+        try:
+            free_bytes, _ = torch.cuda.mem_get_info(device)
+        except Exception:  # pragma: no cover - defensive (e.g. exotic allocator backends)
+            return n_bytes <= 128 * 2**20
+        return n_bytes <= 0.40 * free_bytes
+
     def _fit_standardizer_and_transform(
         self,
         X: np.ndarray | torch.Tensor,
         device: torch.device,
         target_dtype: torch.dtype,
     ) -> tuple[torch.Tensor, int, int]:
-        """Compute exact shifted float64 feature mean/std on device and return standardized tensor."""
+        """Compute exact shifted float64 feature mean/std on device and return standardized tensor.
+
+        Every host row crosses PCIe exactly once. When the raw source fits in a device-memory budget it is
+        transferred in one copy and both the statistics pass and the standardization pass run on device;
+        otherwise rows are streamed once in chunks, their ``x - x_0`` shifts are kept on device in the target
+        dtype, and the final centering/scaling is applied in place after the statistics are known.
+        """
         N, D = self._extract_array_shape(X)
         chunk = 65536
         sum1 = torch.zeros(D, device=device, dtype=torch.float64)
         sum2 = torch.zeros(D, device=device, dtype=torch.float64)
         X_cached: torch.Tensor | None = None
+        X_shift: torch.Tensor | None = None
 
         if isinstance(X, torch.Tensor):
-            if X.device == device or (device.type == "cuda" and X.dtype == torch.float32 and target_dtype == torch.float32):
+            keep_f32 = device.type == "cuda" and X.dtype == torch.float32 and target_dtype == torch.float32
+            if X.device == device or keep_f32 or self._device_cache_fits(N * D * X.element_size(), device):
                 X_cached = X.to(device=device)
-                x0 = X_cached[0:1].to(torch.float64)
-                for st in range(0, N, chunk):
-                    en = min(N, st + chunk)
-                    dx = X_cached[st:en].to(torch.float64) - x0
-                    sum1 += dx.sum(dim=0)
-                    sum2 += (dx * dx).sum(dim=0)
             else:
+                X_rows = lambda st, en: X[st:en].to(device=device, dtype=torch.float64)  # noqa: E731
                 x0 = X[0:1].to(device=device, dtype=torch.float64)
-                for st in range(0, N, chunk):
-                    en = min(N, st + chunk)
-                    dx = X[st:en].to(device=device, dtype=torch.float64) - x0
-                    sum1 += dx.sum(dim=0)
-                    sum2 += (dx * dx).sum(dim=0)
         else:
             arr = np.asarray(X)
             if arr.dtype == np.float32 and target_dtype == torch.float32:
                 X_cached = torch.from_numpy(np.ascontiguousarray(arr)).to(device=device)
-                x0 = X_cached[0:1].to(torch.float64)
-                for st in range(0, N, chunk):
-                    en = min(N, st + chunk)
-                    dx = X_cached[st:en].to(torch.float64) - x0
-                    sum1 += dx.sum(dim=0)
-                    sum2 += (dx * dx).sum(dim=0)
-            elif N * D <= 16_000_000:
+            elif self._device_cache_fits(N * D * 8, device):
                 X_cached = torch.from_numpy(np.ascontiguousarray(arr, dtype=np.float64)).to(device=device)
-                x0 = X_cached[0:1]
-                for st in range(0, N, chunk):
-                    en = min(N, st + chunk)
-                    dx = X_cached[st:en] - x0
-                    sum1 += dx.sum(dim=0)
-                    sum2 += (dx * dx).sum(dim=0)
             else:
-                x0 = torch.from_numpy(np.ascontiguousarray(arr[0:1], dtype=np.float64)).to(device=device)
-                for st in range(0, N, chunk):
-                    en = min(N, st + chunk)
-                    dx = torch.from_numpy(np.ascontiguousarray(arr[st:en], dtype=np.float64)).to(device=device) - x0
-                    sum1 += dx.sum(dim=0)
-                    sum2 += (dx * dx).sum(dim=0)
+                X_rows = lambda st, en: torch.from_numpy(  # noqa: E731
+                    np.ascontiguousarray(arr[st:en], dtype=np.float64)
+                ).to(device=device)
+                x0 = X_rows(0, 1)
+
+        if X_cached is not None:
+            x0 = X_cached[0:1].to(torch.float64)
+            for st in range(0, N, chunk):
+                en = min(N, st + chunk)
+                dx = X_cached[st:en].to(torch.float64) - x0
+                sum1 += dx.sum(dim=0)
+                sum2 += (dx * dx).sum(dim=0)
+        else:
+            # Single streaming pass: accumulate shifted moments and keep x - x0 on device.
+            X_shift = torch.empty((N, D), device=device, dtype=target_dtype)
+            for st in range(0, N, chunk):
+                en = min(N, st + chunk)
+                dx = X_rows(st, en) - x0
+                sum1 += dx.sum(dim=0)
+                sum2 += (dx * dx).sum(dim=0)
+                X_shift[st:en] = dx.to(dtype=target_dtype)
 
         mean_delta = sum1 / N
         mean_64 = x0.squeeze(0) + mean_delta
@@ -209,10 +244,10 @@ class EGMM(DensityMixin, BaseEstimator):
         self._x_mean_np = mean_64.detach().cpu().numpy()
         self._x_std_np = std_64.detach().cpu().numpy()
         self._log_jac_t = (-torch.log(std_64).sum()).to(dtype=target_dtype)
+        inv_std_b = (1.0 / std_64).unsqueeze(0)
 
         if X_cached is not None:
             mean_b = mean_64.unsqueeze(0)
-            inv_std_b = (1.0 / std_64).unsqueeze(0)
             X_std = torch.empty((N, D), device=device, dtype=target_dtype)
             for st in range(0, N, chunk):
                 en = min(N, st + chunk)
@@ -220,7 +255,12 @@ class EGMM(DensityMixin, BaseEstimator):
                 X_std[st:en] = ((Xc - mean_b) * inv_std_b).to(dtype=target_dtype)
             return X_std, N, D
 
-        return self._standardize_to_device(X, device=device, target_dtype=target_dtype), N, D
+        assert X_shift is not None
+        delta_b = mean_delta.unsqueeze(0)
+        for st in range(0, N, chunk):
+            en = min(N, st + chunk)
+            X_shift[st:en] = ((X_shift[st:en].to(torch.float64) - delta_b) * inv_std_b).to(dtype=target_dtype)
+        return X_shift, N, D
 
     def _make_generator(self, device: torch.device, seed_offset: int = 0) -> torch.Generator | None:
         if self.random_state is None:
@@ -240,7 +280,7 @@ class EGMM(DensityMixin, BaseEstimator):
         device, dtype = X_std.device, X_std.dtype
         m_dtype = out_dtype if out_dtype is not None else dtype
 
-        n_seed = min(N, max(2048, 32 * K))
+        n_seed = min(N, max(self._SEED_MIN_POINTS, self._SEED_POINTS_PER_COMPONENT * K))
         if n_seed < N:
             perm = torch.randperm(N, generator=generator, device=device)[:n_seed]
             X_seed = X_std[perm]
@@ -248,9 +288,10 @@ class EGMM(DensityMixin, BaseEstimator):
             X_seed = X_std
 
         if self.init_params == "kmeans++":
-            means = init_kmeans_pp(X_seed, K, generator=generator)
-            # Fast 5-step Lloyd refinement on X_seed stabilizes initial Voronoi moments.
-            for _ in range(5):
+            # Greedy k-means++ (2 + floor(ln K) D^2-sampled candidates per center, sync-free on CUDA).
+            means = init_kmeans_pp(X_seed, K, generator=generator, n_local_trials=None)
+            # Short Lloyd refinement on X_seed stabilizes initial Voronoi moments.
+            for _ in range(self._SEED_LLOYD_ITERS):
                 assign = torch.argmin(torch.cdist(X_seed, means), dim=1)
                 one_hot = torch.nn.functional.one_hot(assign, num_classes=K).to(dtype=dtype)
                 counts = one_hot.sum(dim=0)
@@ -278,11 +319,14 @@ class EGMM(DensityMixin, BaseEstimator):
         if self.covariance_type == "diag":
             Q_init = (one_hot_m.T @ (X_seed_m * X_seed_m)) * inv_n
         else:
-            rX = one_hot_m.T.unsqueeze(-1) * X_seed_m.unsqueeze(0)  # (K, n_seed, D)
-            Q_init = (
-                torch.bmm(rX.transpose(-1, -2), X_seed_m.unsqueeze(0).expand(K, n_seed, D))
-                * inv_n
-            )
+            # Per-component Voronoi scatter, chunked over components to bound the (k, n_seed, D) workspace.
+            Q_init = torch.empty((K, D, D), device=device, dtype=m_dtype)
+            k_chunk = max(1, min(K, 16_000_000 // max(1, n_seed * D)))
+            X_seed_b = X_seed_m.unsqueeze(0)
+            for k0 in range(0, K, k_chunk):
+                k1 = min(K, k0 + k_chunk)
+                rX = one_hot_m[:, k0:k1].T.unsqueeze(-1) * X_seed_b  # (k, n_seed, D)
+                Q_init[k0:k1] = torch.bmm(rX.transpose(-1, -2), X_seed_b.expand(k1 - k0, n_seed, D)) * inv_n
 
         # Patch any starving/singleton cluster with global variance
         bad = counts < 2
@@ -389,6 +433,38 @@ class EGMM(DensityMixin, BaseEstimator):
         self.covariances_ = c_orig_t.detach().cpu().numpy()
         self.precisions_ = p_orig_t.detach().cpu().numpy()
         self.precisions_cholesky_ = pc_orig_t.detach().cpu().numpy()
+        self._set_exact_scoring_params(weights, means_std, covs_std)
+
+    def _set_exact_scoring_params(
+        self, weights: torch.Tensor, means_std: torch.Tensor, covs_std: torch.Tensor
+    ) -> None:
+        """Cache float64 precision factors so every scoring path evaluates log-densities exactly.
+
+        Training uses float32 E-step factors for speed; reported likelihoods (``score``, ``score_samples``,
+        ``predict``, ``predict_proba``, ``bic``, ``aic``) are evaluated in float64 from the final float64
+        M-step covariances. This matters for diagonal mixtures whose variances sit near ``reg_covar``, where
+        the expanded float32 quadratic form cancels catastrophically.
+        """
+        w64 = weights.to(torch.float64)
+        w64 = w64 / w64.sum().clamp_min(1e-300)
+        mu64 = means_std.to(torch.float64)
+        c64 = covs_std.to(torch.float64)
+        if self.covariance_type == "diag":
+            pf64 = torch.rsqrt(c64.clamp_min(1e-300))
+            ldh64 = torch.log(pf64).sum(dim=1)
+        else:
+            c64 = 0.5 * (c64 + c64.transpose(-1, -2))
+            L64, info = torch.linalg.cholesky_ex(c64)
+            if (info != 0).any():
+                eigvals, eigvecs = torch.linalg.eigh(c64)
+                c64 = torch.bmm(eigvecs * eigvals.clamp_min(1e-12).unsqueeze(-2), eigvecs.transpose(-1, -2))
+                L64 = torch.linalg.cholesky(0.5 * (c64 + c64.transpose(-1, -2)))
+            K, D = mu64.shape
+            eye = torch.eye(D, device=c64.device, dtype=torch.float64).expand(K, D, D)
+            pf64 = torch.linalg.solve_triangular(L64, eye, upper=False)
+            ldh64 = -torch.log(torch.diagonal(L64, dim1=-2, dim2=-1)).sum(dim=-1)
+        log_jac64 = -torch.log(self._x_std_f64.to(device=mu64.device, dtype=torch.float64)).sum()
+        self._score_params_t = (torch.log(w64.clamp_min(1e-300)), mu64, pf64, ldh64, log_jac64)
 
     def _step_alpha(self, step: int, total_steps: int, hp: Any) -> float:
         return compute_cosine_alpha(step, total_steps, hp.alpha_0, hp.alpha_min)
@@ -516,10 +592,11 @@ class EGMM(DensityMixin, BaseEstimator):
             revive_every=self.revive_every,
             init_usage_scale=self.init_usage_scale,
             polish_steps=self.polish_steps,
+            schedule_law=self._SCHEDULE_LAW,
         )
         self.hyperparams_ = hp
         steps_ep = hp.steps_per_epoch
-        total_steps = hp.max_epochs * steps_ep
+        total_steps = hp.n_steps
         fast_chol = dtype == torch.float32
         alphas_t, rev_set = self._build_schedule_and_revivals(total_steps, hp, device)
         use_polish = hp.polish_steps > 0
@@ -549,7 +626,7 @@ class EGMM(DensityMixin, BaseEstimator):
             )
             batches = self._build_epoch_batches(
                 N, hp.batch_size, steps_ep, hp.max_epochs, generator=gen, device=device
-            )
+            )[:total_steps]
             if prof and device.type == "cuda":
                 torch.cuda.synchronize(device)
             if prof:
@@ -559,7 +636,7 @@ class EGMM(DensityMixin, BaseEstimator):
             converged = False
             polish_done = 0
 
-            if device.type == "cuda" and total_steps >= 4:
+            if device.type == "cuda" and total_steps >= 4 and self._USE_CUDA_GRAPH:
                 t0_c = _time.perf_counter() if prof else 0.0
                 pos_buf = torch.zeros((), device=device, dtype=torch.long)
                 M_buf = M.clone()
@@ -779,7 +856,7 @@ class EGMM(DensityMixin, BaseEstimator):
                 best_lower_bound = init_lb
                 best_state = (M, S, Q, weights, means, covs, prec_factor, log_det_half)
                 best_revivals = revivals_count
-                best_iters = hp.max_epochs + polish_done
+                best_iters = hp.max_epochs + polish_done  # epochs started (ceil) + polish steps
                 best_converged = converged
 
         assert best_state is not None
@@ -832,6 +909,7 @@ class EGMM(DensityMixin, BaseEstimator):
                 revive_every=self.revive_every,
                 init_usage_scale=self.init_usage_scale,
                 polish_steps=self.polish_steps,
+                schedule_law=self._SCHEDULE_LAW,
             )
             if self._hp.init_usage_scale != 1.0:
                 self._M_t = self._M_t * self._hp.init_usage_scale
@@ -904,114 +982,56 @@ class EGMM(DensityMixin, BaseEstimator):
         self._sync_public_attributes(weights, means, covs, prec_factor, log_det_half)
         return self
 
+    def _iter_weighted_log_prob(
+        self, X: np.ndarray | torch.Tensor, max_work_elements: int = 16_000_000
+    ):
+        """Yield ``(start, end, log pi_k + log N(x | k) + J)`` chunks in exact float64 (original units)."""
+        check_is_fitted(self, ["weights_", "means_", "covariances_"])
+        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=torch.float64)
+        log_w, mu, pf, ldh, log_jac = self._score_params_t
+        N, D = X_std.shape
+        K = self.n_components
+        per_row = K * D if self.covariance_type == "full" else (K + D)
+        chunk_b = max(1, min(N, max_work_elements // max(1, per_row)))
+        bias = log_w.unsqueeze(0) + log_jac
+        for st in range(0, N, chunk_b):
+            en = min(N, st + chunk_b)
+            lp = compute_log_gaussian_prob_from_precisions(
+                X_std[st:en],
+                mu,
+                pf,
+                ldh,
+                covariance_type=self.covariance_type,
+                max_work_elements=max_work_elements,
+            )
+            yield st, en, lp + bias
+
     def _estimate_weighted_log_prob(self, X: np.ndarray | torch.Tensor) -> torch.Tensor:
-        check_is_fitted(self, ["weights_", "means_", "covariances_"])
-        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
-        log_prob = compute_log_gaussian_prob_from_precisions(
-            X_std,
-            self._means_std_t,
-            self._prec_factor_std_t,
-            self._log_det_half_std_t,
-            covariance_type=self.covariance_type,
-        )
-        log_weights = torch.log(self._weights_t.clamp_min(1e-30))
-        return log_prob + log_weights.unsqueeze(0) + self._log_jac_t
-
-    def _score_samples_chunked(
-        self, X: np.ndarray | torch.Tensor, max_work_elements: int = 16_000_000
-    ) -> np.ndarray:
-        check_is_fitted(self, ["weights_", "means_", "covariances_"])
-        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
-        N, D = X_std.shape
-        K = self.n_components
-        chunk_b = max(1, min(N, max_work_elements // max(1, K + D)))
-        if chunk_b >= N:
-            wlp = self._estimate_weighted_log_prob(X)
-            return torch.logsumexp(wlp, dim=1).detach().cpu().numpy().astype(np.float64)
-
-        log_weights = torch.log(self._weights_t.clamp_min(1e-30)).unsqueeze(0)
-        out = np.empty(N, dtype=np.float64)
-        for st in range(0, N, chunk_b):
-            en = min(N, st + chunk_b)
-            lp = compute_log_gaussian_prob_from_precisions(
-                X_std[st:en],
-                self._means_std_t,
-                self._prec_factor_std_t,
-                self._log_det_half_std_t,
-                covariance_type=self.covariance_type,
-                max_work_elements=max_work_elements,
-            )
-            wlp = lp + log_weights + self._log_jac_t
-            out[st:en] = torch.logsumexp(wlp, dim=1).detach().cpu().numpy().astype(np.float64)
-        return out
-
-    def _predict_proba_chunked(
-        self, X: np.ndarray | torch.Tensor, max_work_elements: int = 16_000_000
-    ) -> np.ndarray:
-        check_is_fitted(self, ["weights_", "means_", "covariances_"])
-        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
-        N, D = X_std.shape
-        K = self.n_components
-        chunk_b = max(1, min(N, max_work_elements // max(1, K + D)))
-        if chunk_b >= N:
-            wlp = self._estimate_weighted_log_prob(X)
-            log_norm = torch.logsumexp(wlp, dim=1, keepdim=True)
-            return torch.exp(wlp - log_norm).detach().cpu().numpy().astype(np.float64)
-
-        log_weights = torch.log(self._weights_t.clamp_min(1e-30)).unsqueeze(0)
-        out = np.empty((N, K), dtype=np.float64)
-        for st in range(0, N, chunk_b):
-            en = min(N, st + chunk_b)
-            lp = compute_log_gaussian_prob_from_precisions(
-                X_std[st:en],
-                self._means_std_t,
-                self._prec_factor_std_t,
-                self._log_det_half_std_t,
-                covariance_type=self.covariance_type,
-                max_work_elements=max_work_elements,
-            )
-            wlp = lp + log_weights + self._log_jac_t
-            log_norm = torch.logsumexp(wlp, dim=1, keepdim=True)
-            out[st:en] = torch.exp(wlp - log_norm).detach().cpu().numpy().astype(np.float64)
-        return out
+        parts = [wlp for _, _, wlp in self._iter_weighted_log_prob(X)]
+        return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
 
     def score_samples(self, X: np.ndarray | torch.Tensor) -> np.ndarray:
-        return self._score_samples_chunked(X)
+        N, _ = self._extract_array_shape(X)
+        out = np.empty(N, dtype=np.float64)
+        for st, en, wlp in self._iter_weighted_log_prob(X):
+            out[st:en] = torch.logsumexp(wlp, dim=1).detach().cpu().numpy()
+        return out
 
     def score(self, X: np.ndarray | torch.Tensor, y: Any = None) -> float:
         return float(self.score_samples(X).mean())
 
     def predict_proba(self, X: np.ndarray | torch.Tensor) -> np.ndarray:
-        return self._predict_proba_chunked(X)
+        N, _ = self._extract_array_shape(X)
+        out = np.empty((N, self.n_components), dtype=np.float64)
+        for st, en, wlp in self._iter_weighted_log_prob(X):
+            out[st:en] = torch.softmax(wlp, dim=1).detach().cpu().numpy()
+        return out
 
     def predict(self, X: np.ndarray | torch.Tensor) -> np.ndarray:
-        check_is_fitted(self, ["weights_", "means_", "covariances_"])
-        X_std = self._standardize_to_device(X, device=self._device_t, target_dtype=self._dtype_t)
-        N, D = X_std.shape
-        K = self.n_components
-        chunk_b = max(1, min(N, 16_000_000 // max(1, K + D)))
-        log_weights = torch.log(self._weights_t.clamp_min(1e-30)).unsqueeze(0)
-        if chunk_b >= N:
-            lp = compute_log_gaussian_prob_from_precisions(
-                X_std,
-                self._means_std_t,
-                self._prec_factor_std_t,
-                self._log_det_half_std_t,
-                covariance_type=self.covariance_type,
-            )
-            return torch.argmax(lp + log_weights, dim=1).detach().cpu().numpy()
-
+        N, _ = self._extract_array_shape(X)
         out = np.empty(N, dtype=np.int64)
-        for st in range(0, N, chunk_b):
-            en = min(N, st + chunk_b)
-            lp = compute_log_gaussian_prob_from_precisions(
-                X_std[st:en],
-                self._means_std_t,
-                self._prec_factor_std_t,
-                self._log_det_half_std_t,
-                covariance_type=self.covariance_type,
-            )
-            out[st:en] = torch.argmax(lp + log_weights, dim=1).detach().cpu().numpy()
+        for st, en, wlp in self._iter_weighted_log_prob(X):
+            out[st:en] = torch.argmax(wlp, dim=1).detach().cpu().numpy()
         return out
 
     def fit_predict(self, X: np.ndarray | torch.Tensor, y: Any = None) -> np.ndarray:

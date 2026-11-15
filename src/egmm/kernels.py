@@ -61,7 +61,9 @@ def compute_log_gaussian_prob_from_precisions(
 
     if covariance_type == "diag":
         # Shift by component-mean centroid for shift-invariance in quadratic expansion
-        # (independent of batch chunk boundaries and O(K*D) rather than O(B*D)).
+        # (independent of batch chunk boundaries and O(K*D) rather than O(B*D)). The expanded form is exact in
+        # exact arithmetic but loses accuracy in float32 when p_kd ~ 1/reg_covar; training tolerates this (measured
+        # |dNLL| <= 0.21 nats vs float64 training), and all reported likelihoods are re-evaluated in float64.
         shift = means.mean(dim=0, keepdim=True)
         mc = means - shift
         prec = prec_factor * prec_factor  # (K, D)
@@ -364,14 +366,27 @@ def init_kmeans_pp(
     X: torch.Tensor,
     n_components: int,
     generator: torch.Generator | None = None,
+    n_local_trials: int | None = 1,
 ) -> torch.Tensor:
-    """Fast k-means++ seeding on tensor X (N, D) returning initial centers (K, D)."""
+    """k-means++ seeding on tensor X (N, D) returning initial centers (K, D).
+
+    ``n_local_trials=1`` is classical D^2 sampling (Arthur & Vassilvitskii, 2007). ``n_local_trials=None``
+    selects greedy k-means++ with ``2 + floor(ln K)`` candidates per step (the scikit-learn ``KMeans``
+    default): every candidate is D^2-sampled and the one minimizing the resulting potential is kept.
+    The greedy path is fully vectorized (inverse-CDF sampling via ``searchsorted``) and sync-free on CUDA.
+    """
     orig_device = X.device
     orig_dtype = X.dtype
     N, D = X.shape
     if n_components > N:
         idx = torch.randint(0, N, (n_components,), generator=generator, device=orig_device)
         return X[idx].clone()
+
+    if n_local_trials is None:
+        n_local_trials = 2 + int(math.log(max(1, n_components)))
+    if n_local_trials > 1:
+        # Sync-free on the original device (the classical path below needs host-side sampling).
+        return _greedy_kmeans_pp(X.detach(), n_components, generator, n_local_trials)
 
     # For seed buffers on CUDA, running the sequential K-step loop on CPU avoids K*2 sync stalls.
     work_X = X.detach().cpu() if (orig_device.type == "cuda" and N <= 8192) else X
@@ -405,3 +420,40 @@ def init_kmeans_pp(
         min_dist_sq = torch.minimum(min_dist_sq, dist_sq)
 
     return centers.to(device=orig_device, dtype=orig_dtype)
+
+
+def _greedy_kmeans_pp(
+    X: torch.Tensor,
+    n_components: int,
+    generator: torch.Generator | None,
+    n_local_trials: int,
+) -> torch.Tensor:
+    """Greedy k-means++ (sklearn ``_kmeans_plusplus`` semantics) without host synchronization."""
+    N, D = X.shape
+    dev = X.device
+    acc = torch.float64 if X.dtype == torch.float64 else torch.float32
+    Xa = X.to(acc)
+    x_sq = (Xa * Xa).sum(dim=1)
+    centers_idx = torch.empty((n_components,), device=dev, dtype=torch.long)
+    first = torch.randint(0, N, (1,), generator=generator, device=dev)
+    centers_idx[0:1] = first
+    c0 = Xa.index_select(0, first)  # (1, D)
+    closest = (x_sq + (c0 * c0).sum(dim=1) - 2.0 * (Xa @ c0.T).squeeze(1)).clamp_min_(0.0)
+    pot = closest.sum()
+    for k in range(1, n_components):
+        # Draw in float32 regardless of data dtype so float32/float64 fits share one random stream.
+        u = torch.rand((n_local_trials,), generator=generator, device=dev, dtype=torch.float32).to(acc)
+        cdf = torch.cumsum(closest, dim=0)
+        # Degenerate potential (all points coincide with chosen centers): fall back to uniform draws.
+        targets = torch.where(pot > 0, u * pot, u * N)
+        cdf_u = torch.where(pot > 0, cdf, torch.arange(1, N + 1, device=dev, dtype=acc))
+        cand = torch.searchsorted(cdf_u, targets).clamp_(0, N - 1)
+        Xc = Xa.index_select(0, cand)  # (L, D)
+        d_cand = (x_sq.unsqueeze(0) + (Xc * Xc).sum(dim=1, keepdim=True) - 2.0 * (Xc @ Xa.T)).clamp_min_(0.0)
+        new_closest = torch.minimum(closest.unsqueeze(0), d_cand)  # (L, N)
+        pots = new_closest.sum(dim=1)
+        best = torch.argmin(pots)
+        centers_idx[k : k + 1] = cand.index_select(0, best.view(1))
+        closest = new_closest.index_select(0, best.view(1)).squeeze(0)
+        pot = pots.index_select(0, best.view(1)).squeeze(0)
+    return X.index_select(0, centers_idx).clone()

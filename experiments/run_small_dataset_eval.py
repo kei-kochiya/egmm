@@ -98,7 +98,7 @@ def main() -> None:
             }
             for mname, model in models.items():
                 eval_dev = "cpu" if mname == "SklearnGMM" else (model._resolve_device(N_tr, D).type if mname == "EGMM_auto" else device)
-                res = evaluate_model(model, ds, device=eval_dev)
+                res = evaluate_model(model, ds, device=eval_dev, repeats=1 if mname == "SklearnGMM" else 5)
                 res.update(
                     {
                         "dataset": ds.name,

@@ -137,6 +137,16 @@ class TorchBatchGMM(EGMM):
         return self
 
 
+class TorchBatchGMMFullInit(TorchBatchGMM):
+    """Sensitivity baseline: TorchBatchGMM seeded on the *full* training set.
+
+    Greedy k-means++ and the 10 Lloyd steps run on all N points (as scikit-learn's KMeans-based
+    initialization does) instead of EGMM's ``max(2048, 128 K)``-point seed subsample.
+    """
+
+    _SEED_POINTS_PER_COMPONENT = 1 << 40
+
+
 class CappeMoulinesOnlineGMM(EGMM):
     """Cappé & Moulines (2009) Online EM with polynomial step size (t + t0)^(-rho)."""
 
@@ -266,9 +276,10 @@ class EMeansInitGMM(TorchBatchGMM):
         K = self.n_components
         gen = self._make_generator(device)
 
-        n_seed = min(N, max(2048, 32 * K))
+        # Same greedy k-means++ seeding routine and seed-set size as EGMM / TorchBatchGMM.
+        n_seed = min(N, max(self._SEED_MIN_POINTS, self._SEED_POINTS_PER_COMPONENT * K))
         seed_idx = torch.randperm(N, generator=gen, device=device)[:n_seed]
-        centers = init_kmeans_pp(X_std[seed_idx], K, generator=gen)
+        centers = init_kmeans_pp(X_std[seed_idx], K, generator=gen, n_local_trials=None)
 
         bs = min(N, self.batch_size)
         steps_per_epoch = max(1, math.ceil(N / bs))
@@ -337,10 +348,12 @@ class EMeansInitGMM(TorchBatchGMM):
 class StandardizedSklearnGMM(BaseEstimator, DensityMixin):
     """Scale-invariant wrapper around sklearn.mixture.GaussianMixture.
 
-    Applies feature-wise standardization with std floor 1e-6 (identical to EGMM
+    Applies feature-wise standardization with std floor 1e-12 (identical to EGMM
     and TorchBatchGMM) so that ``reg_covar=1e-6`` acts in standardized coordinates
     rather than raw coordinates, and adjusts all log-likelihoods by the exact
-    change-of-variables log-Jacobian J = -sum(log(std)).
+    change-of-variables log-Jacobian J = -sum(log(std)). The default ``init_params="kmeans"``
+    is scikit-learn's own default, so this wrapper differs from raw ``GaussianMixture`` only
+    by the standardization.
     """
 
     def __init__(
@@ -351,7 +364,7 @@ class StandardizedSklearnGMM(BaseEstimator, DensityMixin):
         reg_covar: float = 1e-6,
         max_iter: int = 100,
         n_init: int = 1,
-        init_params: str = "k-means++",
+        init_params: str = "kmeans",
         random_state: int | None = None,
     ) -> None:
         self.n_components = n_components
@@ -371,7 +384,7 @@ class StandardizedSklearnGMM(BaseEstimator, DensityMixin):
         X_arr = np.asarray(X, dtype=np.float64)
         self.n_features_in_ = int(X_arr.shape[1])
         self._mean = X_arr.mean(axis=0, keepdims=True)
-        self._std = np.maximum(X_arr.std(axis=0, keepdims=True), 1e-6)
+        self._std = np.maximum(X_arr.std(axis=0, keepdims=True), 1e-12)
         self._log_jac = float(-np.log(self._std).sum())
 
         X_std = (X_arr - self._mean) / self._std

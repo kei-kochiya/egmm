@@ -1,7 +1,8 @@
-"""Rigorous 4-part verification suite for e-GMM (leakage-free, 20+ datasets, Pareto, Wilcoxon/CD)."""
+"""e-GMM benchmark runner (head-to-head, ablations, phase profiling, Pareto). Statistics: analyze_results.py."""
 
 from __future__ import annotations
 
+import gc
 import math
 import time
 from pathlib import Path
@@ -9,7 +10,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from scipy import stats
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from sklearn.mixture import GaussianMixture
 
@@ -19,10 +19,29 @@ from egmm.baselines import (
     NaiveMinibatchGMM,
     StandardizedSklearnGMM,
     TorchBatchGMM,
+    TorchBatchGMMFullInit,
 )
 from egmm.estimator import EGMM
 from egmm.revival import revive_dead_components
+from egmm.scaling import auto_hyperparameters
 from experiments.datasets import DatasetSplit, load_benchmark_suite
+
+
+class BracketLawEGMM(EGMM):
+    """Ablation: legacy piecewise sample-size brackets for the epoch and closing-polish budgets."""
+
+    _SCHEDULE_LAW = "bracket"
+
+
+class EagerEGMM(EGMM):
+    """Systems ablation: identical algorithm, eager PyTorch execution (no CUDA graph).
+
+    Like TorchBatchGMM, the eager loop performs one host synchronization per step, so
+    EGMM_eager vs TorchBatchGMM compares the two algorithms at the same engineering level and
+    EGMM vs EGMM_eager isolates the CUDA-graph effect.
+    """
+
+    _USE_CUDA_GRAPH = False
 
 
 def _sync(device: str) -> None:
@@ -30,16 +49,49 @@ def _sync(device: str) -> None:
         torch.cuda.synchronize()
 
 
+_WARM_BUF: torch.Tensor | None = None
+
+
+def gpu_clock_warmup(ms: float = 60.0) -> None:
+    """Run ~60 ms of dense GEMMs so the GPU leaves its idle clock state before a timed fit.
+
+    Applied identically before every GPU method's timed fit: long CPU-only phases (e.g. scikit-learn
+    fits) otherwise let the GPU down-clock, inflating whichever GPU method happens to run next.
+    """
+    global _WARM_BUF
+    if not torch.cuda.is_available():
+        return
+    if _WARM_BUF is None:
+        _WARM_BUF = torch.randn(2048, 2048, device="cuda")
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    while (time.perf_counter() - t0) * 1e3 < ms:
+        _ = _WARM_BUF @ _WARM_BUF
+        torch.cuda.synchronize()
+
+
+GPU_TIMING_REPEATS = 5  # timed refits per (dataset, method, seed) for PyTorch methods; median is reported
+
+
 def evaluate_model(
     model,
     ds: DatasetSplit,
     device: str,
+    repeats: int = 1,
 ) -> dict[str, float]:
-    _sync(device)
-    t0 = time.perf_counter()
-    model.fit(ds.X_train)
-    _sync(device)
-    fit_time = time.perf_counter() - t0
+    """Fit ``repeats`` times with identical settings (results are deterministic given the seed) and report
+    the median fit time; quality metrics come from the final fit."""
+    times = []
+    for _ in range(max(1, repeats)):
+        gc.collect()
+        if device == "cuda":
+            gpu_clock_warmup()
+        _sync(device)
+        t0 = time.perf_counter()
+        model.fit(ds.X_train)
+        _sync(device)
+        times.append(time.perf_counter() - t0)
+    fit_time = float(np.median(times))
 
     test_nll = float(-model.score(ds.X_test))
     val_nll = float(-model.score(ds.X_val))
@@ -55,6 +107,9 @@ def evaluate_model(
     dead_cnt = int(np.sum(weights < (0.05 / ds.n_components))) if weights is not None else 0
     return {
         "fit_time": fit_time,
+        "fit_time_min": float(np.min(times)),
+        "fit_time_max": float(np.max(times)),
+        "timing_repeats": len(times),
         "val_nll": val_nll,
         "test_nll": test_nll,
         "bic": bic,
@@ -72,10 +127,18 @@ def tune_online_em(ds: DatasetSplit, device: str, seed: int) -> tuple[float, int
     best_val = math.inf
     best_cfg = (0.75, min(N, 1024))
     epochs = 6 if N < 30_000 else 3
-    bs_grid = [2048, 4096, 8192] if N >= 80_000 else ([1024, 2048, 4096] if N >= 20_000 else [512, 1024, 2048])
+    if N >= 80_000:
+        bs_grid = [2048, 4096, 8192]
+    elif N >= 20_000:
+        bs_grid = [1024, 2048, 4096]
+    elif N >= 4096:
+        bs_grid = [512, 1024, 2048]
+    else:
+        # Small N: scale the grid to N so every dataset gets 3 distinct batch sizes (9 configurations).
+        bs_grid = sorted({max(16, N // 8), max(16, N // 4), max(16, N // 2)})
     for rho in [0.55, 0.70, 0.85]:
         for bs in bs_grid:
-            if bs > N // 2 and N > 512:
+            if bs > max(16, N // 2):
                 continue
             m = CappeMoulinesOnlineGMM(
                 n_components=ds.n_components,
@@ -93,7 +156,11 @@ def tune_online_em(ds: DatasetSplit, device: str, seed: int) -> tuple[float, int
     return best_cfg
 
 
-def run_head_to_head(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0, 1, 2)) -> pd.DataFrame:
+def run_head_to_head(
+    datasets: list[DatasetSplit],
+    seeds: tuple[int, ...] = (0, 1, 2),
+    out_csv: str = "docs/experiments/benchmark_head_to_head.csv",
+) -> pd.DataFrame:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda":
         _w = torch.randn(1024, 16, device="cuda")
@@ -121,7 +188,22 @@ def run_head_to_head(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0, 
                     device=device,
                     random_state=seed,
                 ),
+                "EGMM_polish0": EGMM(
+                    n_components=K,
+                    covariance_type=cov,
+                    polish_steps=0,
+                    device=device,
+                    random_state=seed,
+                ),
                 "TorchBatchGMM": TorchBatchGMM(
+                    n_components=K,
+                    covariance_type=cov,
+                    max_iter=50,
+                    tol=1e-3,
+                    device=device,
+                    random_state=seed,
+                ),
+                "TorchBatchGMM_fullinit": TorchBatchGMMFullInit(
                     n_components=K,
                     covariance_type=cov,
                     max_iter=50,
@@ -155,30 +237,34 @@ def run_head_to_head(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0, 
                 ),
             }
 
-            # Run sklearn CPU baselines (cap iters on >150k full datasets so CPU run completes cleanly)
-            run_sk = not (N > 150_000 and cov == "full" and seed > 0)
-            if run_sk:
-                sk_iters = 20 if (N > 150_000 and cov == "full") else 50
-                models["StandardizedSklearnGMM"] = StandardizedSklearnGMM(
-                    n_components=K,
-                    covariance_type=cov,
-                    max_iter=sk_iters,
-                    tol=1e-3,
-                    reg_covar=1e-6,
-                    random_state=seed,
-                )
-                models["SklearnGMM"] = GaussianMixture(
-                    n_components=K,
-                    covariance_type=cov,
-                    max_iter=sk_iters,
-                    tol=1e-3,
-                    reg_covar=1e-6,
-                    random_state=seed,
-                )
+            # CPU scikit-learn references: identical max_iter=50 / tol=1e-3 budget on every dataset and seed.
+            sk_iters = 50
+            models["StandardizedSklearnGMM"] = StandardizedSklearnGMM(
+                n_components=K,
+                covariance_type=cov,
+                max_iter=sk_iters,
+                tol=1e-3,
+                reg_covar=1e-6,
+                random_state=seed,
+            )
+            models["SklearnGMM"] = GaussianMixture(
+                n_components=K,
+                covariance_type=cov,
+                max_iter=sk_iters,
+                tol=1e-3,
+                reg_covar=1e-6,
+                random_state=seed,
+            )
 
-            for mname, model in models.items():
-                m_dev = "cpu" if mname in ("SklearnGMM", "StandardizedSklearnGMM") else device
-                res = evaluate_model(model, ds, device=m_dev)
+            # Randomized (but reproducible) method order per (dataset, seed): no method always follows
+            # the long CPU scikit-learn fits.
+            order = list(models.keys())
+            np.random.default_rng(10_007 * seed + sum(map(ord, ds.name))).shuffle(order)
+            for mname in order:
+                model = models[mname]
+                is_cpu = mname in ("SklearnGMM", "StandardizedSklearnGMM")
+                m_dev = "cpu" if is_cpu else device
+                res = evaluate_model(model, ds, device=m_dev, repeats=1 if is_cpu else GPU_TIMING_REPEATS)
                 res.update(
                     {
                         "dataset": ds.name,
@@ -203,7 +289,7 @@ def run_head_to_head(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0, 
             f"TorchBatch: {tb['test_nll']:.4f} ({tb['fit_time']:.3f}s)",
             flush=True,
         )
-        pd.DataFrame(rows).to_csv("docs/experiments/benchmark_head_to_head.csv", index=False)
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
 
     return pd.DataFrame(rows)
 
@@ -256,7 +342,7 @@ def run_pareto_sweeps(datasets: list[DatasetSplit]) -> pd.DataFrame:
                     ),
                 ),
             ]:
-                res = evaluate_model(model, ds, device=device)
+                res = evaluate_model(model, ds, device=device, repeats=3)
                 res.update({"dataset": ds.name, "budget": ep, "method": mname})
                 rows.append(res)
 
@@ -269,7 +355,7 @@ def run_pareto_sweeps(datasets: list[DatasetSplit]) -> pd.DataFrame:
                 device=device,
                 random_state=0,
             )
-            res = evaluate_model(tb, ds, device=device)
+            res = evaluate_model(tb, ds, device=device, repeats=3)
             res.update({"dataset": ds.name, "budget": it, "method": "TorchBatchGMM"})
             rows.append(res)
 
@@ -301,6 +387,7 @@ def run_ablation_suite(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0
         K = ds.n_components
         cov = ds.recommended_cov
         best_rho, best_bs = tune_online_em(ds, device=device, seed=0)
+        egmm_hp = auto_hyperparameters(N, K, D, cov)
 
         for seed in seeds:
             abl_models = {
@@ -331,20 +418,30 @@ def run_ablation_suite(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0
                     device=device,
                     random_state=seed,
                 ),
+                "EGMM_bracket_law": BracketLawEGMM(
+                    n_components=K,
+                    covariance_type=cov,
+                    device=device,
+                    random_state=seed,
+                ),
+                # Exactly EGMM's resolved closing-polish budget and initial moment scale.
                 "OnlineGMM_matched_polish": CappeMoulinesOnlineGMM(
                     n_components=K,
                     covariance_type=cov,
                     max_epochs=6 if N < 30_000 else 3,
                     batch_size=best_bs,
                     rho=best_rho,
-                    polish_steps="auto",
-                    init_usage_scale="auto",
+                    polish_steps=egmm_hp.polish_steps,
+                    init_usage_scale=egmm_hp.init_usage_scale,
                     device=device,
                     random_state=seed,
                 ),
             }
-            for mname, model in abl_models.items():
-                res = evaluate_model(model, ds, device=device)
+            order = list(abl_models.keys())
+            np.random.default_rng(20_011 * seed + sum(map(ord, ds.name))).shuffle(order)
+            for mname in order:
+                model = abl_models[mname]
+                res = evaluate_model(model, ds, device=device, repeats=GPU_TIMING_REPEATS)
                 res.update(
                     {
                         "dataset": ds.name,
@@ -362,6 +459,35 @@ def run_ablation_suite(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0
     return pd.DataFrame(rows)
 
 
+def run_systems_ablation(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0, 1, 2)) -> pd.DataFrame:
+    """Separate algorithmic from implementation effects in one harness pass (GPU methods only)."""
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    rows = []
+    for ds in datasets:
+        N, D = ds.X_train.shape
+        K = ds.n_components
+        cov = ds.recommended_cov
+        for seed in seeds:
+            models = {
+                "EGMM": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
+                "EGMM_eager": EagerEGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
+                "TorchBatchGMM": TorchBatchGMM(
+                    n_components=K, covariance_type=cov, max_iter=50, tol=1e-3, device=device, random_state=seed
+                ),
+            }
+            order = list(models.keys())
+            np.random.default_rng(30_011 * seed + sum(map(ord, ds.name))).shuffle(order)
+            for mname in order:
+                res = evaluate_model(models[mname], ds, device=device, repeats=GPU_TIMING_REPEATS)
+                res.update(
+                    {"dataset": ds.name, "regime": ds.regime, "N_train": N, "D": D, "K": K, "cov_type": cov,
+                     "seed": seed, "method": mname}
+                )
+                rows.append(res)
+        pd.DataFrame(rows).to_csv("docs/experiments/benchmark_systems.csv", index=False)
+    return pd.DataFrame(rows)
+
+
 def run_phase_breakdown(datasets: list[DatasetSplit]) -> pd.DataFrame:
     """Profile cold-start vs warm-start and phase-by-phase runtime breakdown."""
     target_names = {
@@ -373,6 +499,7 @@ def run_phase_breakdown(datasets: list[DatasetSplit]) -> pd.DataFrame:
         "covtype_581k",
         "syn_scale200k",
         "syn_scale500k_diag",
+        "syn_scale400k_d256_diag",
     }
     device = "cuda" if torch.cuda.is_available() else "cpu"
     rows = []
@@ -385,7 +512,9 @@ def run_phase_breakdown(datasets: list[DatasetSplit]) -> pd.DataFrame:
         m = EGMM(n_components=K, covariance_type=cov, device=device, random_state=0)
         m._profile_phases = True
 
-        # Cold start (first fit on this estimator instance captures CUDA Graph)
+        # Cold: first fit on this dataset's shapes (cuBLAS/cuSOLVER plan selection, caching-allocator
+        # growth). Every fit captures a fresh CUDA graph, so "warm" differs only by those process caches.
+        gpu_clock_warmup()
         m.fit(ds.X_train)
         tb_cold = dict(m.timing_breakdown_)
         tb_cold.update(
@@ -401,7 +530,8 @@ def run_phase_breakdown(datasets: list[DatasetSplit]) -> pd.DataFrame:
         )
         rows.append(tb_cold)
 
-        # Warm start (second fit reuses captured CUDA Graph)
+        # Warm: immediate refit of the same instance on the same data.
+        gpu_clock_warmup()
         m.fit(ds.X_train)
         tb_warm = dict(m.timing_breakdown_)
         tb_warm.update(
@@ -421,131 +551,33 @@ def run_phase_breakdown(datasets: list[DatasetSplit]) -> pd.DataFrame:
     return df_p
 
 
-def compute_statistical_tests(df: pd.DataFrame, df_abl: pd.DataFrame | None = None) -> str:
-    """Wilcoxon signed-rank tests + Friedman/Nemenyi mean ranks across datasets."""
-    agg = df.groupby(["dataset", "method"])[["test_nll", "fit_time"]].mean().reset_index()
-    piv_nll = agg.pivot(index="dataset", columns="method", values="test_nll")
-    piv_time = agg.pivot(index="dataset", columns="method", values="fit_time")
-
-    lines = ["=== Statistical Significance Summary (All Benchmark Datasets) ==="]
-    common_methods = [
-        m
-        for m in [
-            "EGMM",
-            "TorchBatchGMM",
-            "OnlineGMM_tuned",
-            "NaiveMinibatchGMM",
-            "EMeansInitGMM",
-            "StandardizedSklearnGMM",
-            "SklearnGMM",
-        ]
-        if m in piv_nll.columns
-    ]
-
-    # Pairwise Wilcoxon vs EGMM on Test NLL & Fit Time
-    for base in common_methods:
-        if base == "EGMM":
-            continue
-        pair = piv_nll[["EGMM", base]].dropna()
-        pair_t = piv_time.loc[pair.index, ["EGMM", base]].dropna()
-        diff_nll = pair["EGMM"] - pair[base]  # negative means EGMM has lower (better) NLL
-        wins = int((diff_nll < -1e-3).sum())
-        ties = int((diff_nll.abs() <= 1e-3).sum())
-        losses = int((diff_nll > 1e-3).sum())
-
-        stat_nll, p_nll = stats.wilcoxon(pair["EGMM"], pair[base], zero_method="zsplit")
-        stat_t, p_t = stats.wilcoxon(pair_t["EGMM"], pair_t[base], zero_method="zsplit")
-        med_speedup = float((pair_t[base] / pair_t["EGMM"]).median())
-        lines.append(
-            f"EGMM vs {base:22s} (n={len(pair):2d}): "
-            f"NLL W/T/L={wins:2d}/{ties:2d}/{losses:2d}, med_dNLL={diff_nll.median():+.4f}, "
-            f"Wilcoxon p_nll={p_nll:.4g} | med_speedup={med_speedup:.2f}x, p_time={p_t:.4g}"
-        )
-
-    # Friedman & Mean Ranks on complete datasets
-    comp = piv_nll[common_methods].dropna()
-    ranks_nll = comp.rank(axis=1, ascending=True)
-    mean_ranks = ranks_nll.mean(axis=0).sort_values()
-    if len(comp) >= 3 and len(common_methods) >= 3:
-        f_stat, f_p = stats.friedmanchisquare(*[comp[c].values for c in common_methods])
-        k_m = len(common_methods)
-        n_d = len(comp)
-        q_table = {3: 2.343, 4: 2.569, 5: 2.728, 6: 2.850, 7: 2.949}
-        q_alpha = q_table.get(k_m, 2.949)
-        cd = q_alpha * math.sqrt(k_m * (k_m + 1) / (6.0 * n_d))
-        lines.append(
-            f"\nFriedman test (n={n_d}, k={k_m}): chi2={f_stat:.3f}, p={f_p:.4g}, Nemenyi CD(0.05)={cd:.3f}"
-        )
-    lines.append("Mean NLL Ranks (1=best):")
-    for m, r in mean_ranks.items():
-        lines.append(f"  {m:22s}: {r:.3f}")
-
-    # Large-N (N_train > 100k, polish_steps == 0) subset summary
-    large_ds = df[df["N_train"] > 100_000]["dataset"].unique()
-    if len(large_ds) > 0:
-        lines.append(f"\n=== Large-Scale Zero-Polish Subset (N_train > 100k, n={len(large_ds)}) ===")
-        piv_l_nll = piv_nll.loc[piv_nll.index.intersection(large_ds)]
-        piv_l_time = piv_time.loc[piv_time.index.intersection(large_ds)]
-        for base in common_methods:
-            if base == "EGMM":
-                continue
-            pair = piv_l_nll[["EGMM", base]].dropna()
-            pair_t = piv_l_time.loc[pair.index, ["EGMM", base]].dropna()
-            diff_nll = pair["EGMM"] - pair[base]
-            wins = int((diff_nll < -1e-3).sum())
-            ties = int((diff_nll.abs() <= 1e-3).sum())
-            losses = int((diff_nll > 1e-3).sum())
-            med_sp = float((pair_t[base] / pair_t["EGMM"]).median())
-            lines.append(
-                f"Large-N EGMM vs {base:22s} (n={len(pair)}): "
-                f"W/T/L={wins}/{ties}/{losses}, med_dNLL={diff_nll.median():+.4f}, med_speedup={med_sp:.2f}x"
-            )
-
-    if df_abl is not None and not df_abl.empty:
-        lines.append("\n=== Component & Fairness Ablations Summary ===")
-        agg_a = df_abl.groupby(["dataset", "method"])[["test_nll", "fit_time", "dead_components", "ari"]].mean().reset_index()
-        piv_a_nll = agg_a.pivot(index="dataset", columns="method", values="test_nll")
-        piv_a_time = agg_a.pivot(index="dataset", columns="method", values="fit_time")
-        piv_a_dead = agg_a.pivot(index="dataset", columns="method", values="dead_components")
-        for abl in ["EGMM_polish0", "EGMM_no_init_scale", "EGMM_no_revival", "OnlineGMM_matched_polish"]:
-            if abl not in piv_a_nll.columns:
-                continue
-            pair = piv_a_nll[["EGMM", abl]].dropna()
-            pair_t = piv_a_time.loc[pair.index, ["EGMM", abl]].dropna()
-            diff_nll = pair["EGMM"] - pair[abl]
-            wins = int((diff_nll < -1e-3).sum())
-            ties = int((diff_nll.abs() <= 1e-3).sum())
-            losses = int((diff_nll > 1e-3).sum())
-            _, p_a = stats.wilcoxon(pair["EGMM"], pair[abl], zero_method="zsplit")
-            dead_eg = float(piv_a_dead["EGMM"].mean())
-            dead_ab = float(piv_a_dead[abl].mean())
-            lines.append(
-                f"EGMM vs {abl:24s} (n={len(pair):2d}): "
-                f"W/T/L={wins:2d}/{ties:2d}/{losses:2d}, med_dNLL={diff_nll.median():+.4f}, p={p_a:.4g} | "
-                f"mean_dead={dead_eg:.2f} vs {dead_ab:.2f}, med_time_ratio={(pair_t[abl]/pair_t['EGMM']).median():.2f}x"
-            )
-
-    return "\n".join(lines)
-
-
 if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description="e-GMM benchmark suite")
+    ap.add_argument(
+        "--stages",
+        default="h2h,abl,phase,pareto,sys",
+        help="comma-separated subset of h2h,abl,phase,pareto,sys (statistics: experiments/analyze_results.py)",
+    )
+    stages = set(ap.parse_args().stages.split(","))
     out_dir = Path("docs/experiments")
     out_dir.mkdir(parents=True, exist_ok=True)
     datasets = load_benchmark_suite()
     print(f"Loaded {len(datasets)} benchmark datasets.")
 
-    df_h2h = run_head_to_head(datasets, seeds=(0, 1, 2))
-    df_h2h.to_csv(out_dir / "benchmark_head_to_head.csv", index=False)
-
-    df_abl = run_ablation_suite(datasets, seeds=(0, 1, 2))
-    df_abl.to_csv(out_dir / "benchmark_ablations.csv", index=False)
-
-    df_phase = run_phase_breakdown(datasets)
-    df_phase.to_csv(out_dir / "benchmark_phase_breakdown.csv", index=False)
-
-    summary_txt = compute_statistical_tests(df_h2h, df_abl)
-    print("\n" + summary_txt)
-    (out_dir / "stats_summary.txt").write_text(summary_txt, encoding="utf-8")
-
-    df_pareto = run_pareto_sweeps(datasets)
-    df_pareto.to_csv(out_dir / "benchmark_pareto.csv", index=False)
+    if "h2h" in stages:
+        df_h2h = run_head_to_head(datasets, seeds=(0, 1, 2))
+        df_h2h.to_csv(out_dir / "benchmark_head_to_head.csv", index=False)
+    if "abl" in stages:
+        df_abl = run_ablation_suite(datasets, seeds=(0, 1, 2))
+        df_abl.to_csv(out_dir / "benchmark_ablations.csv", index=False)
+    if "phase" in stages:
+        df_phase = run_phase_breakdown(datasets)
+        df_phase.to_csv(out_dir / "benchmark_phase_breakdown.csv", index=False)
+    if "sys" in stages:
+        df_sys = run_systems_ablation(datasets, seeds=(0, 1, 2))
+        df_sys.to_csv(out_dir / "benchmark_systems.csv", index=False)
+    if "pareto" in stages:
+        df_pareto = run_pareto_sweeps(datasets)
+        df_pareto.to_csv(out_dir / "benchmark_pareto.csv", index=False)

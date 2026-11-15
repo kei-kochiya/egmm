@@ -64,7 +64,7 @@ def run_sweep() -> pd.DataFrame:
         (90_000, 24, 128, 90010, 10.0, 1.2),
     ]
     batch_grid = [512, 1024, 2048, 4096, 8192, 16384]
-    alpha_grid = [0.05, 0.12, 0.25, 0.45, 0.70]
+    alpha_grid = [0.05, 0.12, 0.25, 0.45, 0.70, 0.85]
     epoch_grid = [2, 4, 6]
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
