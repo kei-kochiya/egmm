@@ -1,4 +1,8 @@
-"""Out-of-suite zero-shot small-dataset evaluation (16 unseen sklearn/OpenML datasets, N_total <= 5500)."""
+"""Small-dataset evaluation of the CPU/GPU router (16 sklearn/OpenML datasets, N_total <= 5500).
+
+These datasets were used while developing the small-N rules and the router thresholds (see the paper's
+leakage disclosure), so they are development data, not an unseen holdout.
+"""
 
 from __future__ import annotations
 

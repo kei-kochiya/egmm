@@ -1,4 +1,5 @@
-"""Benchmark dataset suite (22+ datasets across Small, Medium, Large, and Synthetic Hard regimes)."""
+"""Development benchmark suite: 33 datasets (24 real OpenML/UCI/scikit-learn + 9 synthetic), with fixed
+70/15/15 splits, per-dataset K, covariance type and optional train-only PCA."""
 
 from __future__ import annotations
 
