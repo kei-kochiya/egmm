@@ -442,7 +442,7 @@ def plot_small_dataset_generalization(csv_path: Path, out_path: Path) -> None:
 
 
 def plot_holdout_dnll(csv_path: Path, out_path: Path, conv_path: Path | None = None) -> None:
-    """Per-dataset holdout differences (e-GMM minus baseline) on the datasets without metric artefacts."""
+    """Per-dataset holdout differences (e-GMM minus baseline) on the datasets without metric artifacts."""
     if not csv_path.exists():
         return
     df = pd.read_csv(csv_path)
@@ -466,7 +466,7 @@ def plot_holdout_dnll(csv_path: Path, out_path: Path, conv_path: Path | None = N
     ax.set_yticks(y)
     ax.set_yticklabels([f"{d} (D={int(meta.loc[d, 'D'])}, {meta.loc[d, 'cov_type']})" for d in order], fontsize=8.2)
     ax.set_xlabel(r"Test $\Delta$NLL = e-GMM $-$ baseline (nats; $<0$ = e-GMM better)")
-    ax.set_title(f"Pre-registered holdout: {len(order)} datasets without metric artefacts")
+    ax.set_title(f"Pre-registered holdout: {len(order)} datasets without metric artifacts")
     ax.grid(True, axis="x", alpha=0.25)
     ax.legend(frameon=True, facecolor="white", framealpha=0.95, loc="lower right", fontsize=8.0)
     fig.tight_layout()

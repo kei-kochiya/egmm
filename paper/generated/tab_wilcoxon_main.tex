@@ -1,45 +1,31 @@
-\multicolumn{7}{l}{\emph{A. All 33 development datasets (3-seed means; Friedman $\chi^2_F = 54.34$, $p = 6.31\times 10^{-10}$)}} \\
-\egmm{} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $7.55\times 10^{-4}$ & \textbf{2.35$\times$} & $1.59\times 10^{-7}$ & 69/2/28 \\
-\egmm{} vs \texttt{OnlineGMM\_tuned} & \textbf{26/1/6} & $-0.2733$ & $3.11\times 10^{-4}$ & 0.85$\times$ & $9.33\times 10^{-2}$ & 76/5/18 \\
-\egmm{} vs \texttt{NaiveMinibatchGMM} & \textbf{33/0/0} & $-0.7427$ & $1.63\times 10^{-9}$ & 0.64$\times$ & $3.12\times 10^{-7}$ & 97/0/2 \\
-\egmm{} vs \texttt{EMeansInitGMM} & \textbf{31/0/2} & $-0.5191$ & $2.84\times 10^{-6}$ & \textbf{1.10$\times$} & $7.55\times 10^{-3}$ & 90/0/9 \\
-\egmm{} vs \texttt{StdSklearnGMM} (CPU) & \textbf{21/0/12} & $-0.1424$ & $0.289$ & \textbf{32.52$\times$} & $1.63\times 10^{-9}$ & 57/1/41 \\
-\egmm{} vs \texttt{SklearnGMM} (Raw CPU) & \textbf{18/0/15} & $-0.1347$ & $0.386$ & \textbf{27.52$\times$} & $1.63\times 10^{-9}$ & 61/0/38 \\
-\egmm{} vs \texttt{TorchBatch\_fullinit} & \textbf{19/0/14} & $-0.0890$ & $8.79\times 10^{-2}$ & \textbf{2.46$\times$} & $2.36\times 10^{-7}$ & 64/0/35 \\
-\midrule
-\multicolumn{7}{l}{\emph{B. Large-scale subset ($N_{\mathrm{train}} > 10^5$, $n = 7$)}} \\
-\egmm{} vs \texttt{TorchBatchGMM} & \textbf{5/0/2} & $-0.3346$ & $0.625$ & \textbf{3.26$\times$} & $0.109$ & 14/2/5 \\
-\egmm{} vs \texttt{OnlineGMM\_tuned} & \textbf{4/1/2} & $-0.2733$ & $0.656$ & \textbf{1.32$\times$} & $0.156$ & 14/4/3 \\
-\egmm{} vs \texttt{NaiveMinibatchGMM} & \textbf{7/0/0} & $-0.3981$ & $0.109$ & 0.90$\times$ & $0.219$ & 21/0/0 \\
-\egmm{} vs \texttt{EMeansInitGMM} & \textbf{6/0/1} & $-0.4141$ & $0.188$ & \textbf{2.36$\times$} & $0.109$ & 18/0/3 \\
-\egmm{} vs \texttt{StdSklearnGMM} (CPU) & \textbf{4/0/3} & $-0.2028$ & $0.938$ & \textbf{167.19$\times$} & $0.109$ & 12/0/9 \\
-\egmm{} vs \texttt{SklearnGMM} (Raw CPU) & \textbf{5/0/2} & $-0.7065$ & $0.547$ & \textbf{202.27$\times$} & $0.109$ & 17/0/4 \\
-\egmm{} vs \texttt{TorchBatch\_fullinit} & 3/0/4 & $+0.0212$ & $0.938$ & \textbf{7.99$\times$} & $0.109$ & 12/0/9 \\
-\midrule
-\multicolumn{7}{l}{\emph{C. The 10 development datasets added after the original rules were set}} \\
-\egmm{} vs \texttt{TorchBatchGMM} & \textbf{7/0/3} & $-0.5488$ & $8.20\times 10^{-2}$ & \textbf{3.79$\times$} & $5.86\times 10^{-3}$ & 18/0/12 \\
-\egmm{} vs \texttt{OnlineGMM\_tuned} & \textbf{7/1/2} & $-0.6708$ & $8.20\times 10^{-2}$ & 0.87$\times$ & $0.375$ & 21/3/6 \\
-\egmm{} vs \texttt{StdSklearnGMM} (CPU) & 5/0/5 & $-0.0864$ & $0.492$ & \textbf{133.50$\times$} & $5.86\times 10^{-3}$ & 15/0/15 \\
-\midrule
-\multicolumn{7}{l}{\emph{D. Component \& fairness ablations across all 33 datasets}} \\
-\egmm{} vs \texttt{EGMM\_no\_revival} & \textbf{24/7/2} & $-0.2389$ & $1.16\times 10^{-4}$ & 0.91$\times$ & $1.71\times 10^{-5}$ & 61/34/4 \\
-\egmm{} vs \texttt{OnlineGMM\_matched\_pol} & \textbf{24/1/8} & $-0.1804$ & $1.12\times 10^{-4}$ & \textbf{1.19$\times$} & $4.11\times 10^{-3}$ & 70/4/25 \\
-\egmm{} vs \texttt{EGMM\_polish0} & \textbf{21/5/7} & $-0.0641$ & $6.47\times 10^{-3}$ & 0.81$\times$ & $3.86\times 10^{-6}$ & 60/16/23 \\
-\egmm{} vs \texttt{EGMM\_no\_init\_scale} & \textbf{12/13/8} & $+0.0000$ & $0.863$ & 0.99$\times$ & $0.560$ & 30/41/28 \\
-\egmm{} vs \texttt{EGMM\_bracket\_law} & \textbf{8/21/4} & $+0.0000$ & $0.863$ & 0.99$\times$ & $0.560$ & 23/61/15 \\
-\texttt{EGMM\_polish0} vs \texttt{TorchBatch} & \textbf{18/0/15} & $-0.0155$ & $0.863$ & \textbf{3.23$\times$} & $3.10\times 10^{-8}$ & 54/2/43 \\
-\texttt{EGMM\_polish0} vs \texttt{OnlineGMM} & \textbf{21/1/11} & $-0.1208$ & $0.373$ & \textbf{1.23$\times$} & $2.06\times 10^{-3}$ & 63/4/32 \\
-\midrule
-\multicolumn{7}{l}{\emph{E. Pre-registered fresh holdout (16 new OpenML datasets, code frozen before fitting)}} \\
+\multicolumn{7}{l}{\emph{A. Pre-registered holdout (16 new OpenML datasets, code frozen before fitting)}} \\
 \egmm{} vs \texttt{TorchBatchGMM} & \textbf{9/0/7} & $-0.1361$ & $1.000$ & \textbf{2.54$\times$} & $2.44\times 10^{-4}$ & 27/1/20 \\
 \egmm{} vs \texttt{OnlineGMM\_tuned} & \textbf{13/0/3} & $-1.1173$ & $1.17\times 10^{-2}$ & 0.96$\times$ & $0.645$ & 35/1/12 \\
 \egmm{} vs \texttt{NaiveMinibatchGMM} & \textbf{13/0/3} & $-2.0473$ & $0.392$ & 0.70$\times$ & $2.14\times 10^{-4}$ & 40/0/8 \\
 \egmm{} vs \texttt{EMeansInitGMM} & \textbf{11/0/5} & $-0.7525$ & $0.877$ & \textbf{1.01$\times$} & $0.940$ & 37/0/11 \\
 \egmm{} vs \texttt{StdSklearnGMM} (CPU) & 8/0/8 & $-0.0215$ & $1.000$ & \textbf{37.08$\times$} & $2.14\times 10^{-4}$ & 28/0/20 \\
 \egmm{} vs \texttt{SklearnGMM} (Raw CPU) & \textbf{9/0/6} & $-0.2415$ & $1.000$ & \textbf{39.97$\times$} & $2.44\times 10^{-4}$ & 30/0/15 \\
-\egmm{} vs \texttt{TorchBatch\_fullinit} & \textbf{10/0/6} & $-0.0802$ & $1.000$ & \textbf{2.65$\times$} & $2.14\times 10^{-4}$ & 29/1/18 \\
+\egmm{} vs \texttt{TorchBatchGMM\_fullinit} & \textbf{10/0/6} & $-0.0802$ & $1.000$ & \textbf{2.65$\times$} & $2.14\times 10^{-4}$ & 29/1/18 \\
 \midrule
-\multicolumn{7}{l}{\emph{F. Algorithm vs.\ engineering (separate systems run, 33 datasets)}} \\
+\multicolumn{7}{l}{\emph{B. All 33 development datasets (Friedman $\chi^2_F = 54.34$, $p = 6.31\times 10^{-10}$)}} \\
+\egmm{} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $7.55\times 10^{-4}$ & \textbf{2.35$\times$} & $1.59\times 10^{-7}$ & 69/2/28 \\
+\egmm{} vs \texttt{OnlineGMM\_tuned} & \textbf{26/1/6} & $-0.2733$ & $3.11\times 10^{-4}$ & 0.85$\times$ & $9.33\times 10^{-2}$ & 76/5/18 \\
+\egmm{} vs \texttt{NaiveMinibatchGMM} & \textbf{33/0/0} & $-0.7427$ & $1.63\times 10^{-9}$ & 0.64$\times$ & $3.12\times 10^{-7}$ & 97/0/2 \\
+\egmm{} vs \texttt{EMeansInitGMM} & \textbf{31/0/2} & $-0.5191$ & $2.84\times 10^{-6}$ & \textbf{1.10$\times$} & $7.55\times 10^{-3}$ & 90/0/9 \\
+\egmm{} vs \texttt{StdSklearnGMM} (CPU) & \textbf{21/0/12} & $-0.1424$ & $0.289$ & \textbf{32.52$\times$} & $1.63\times 10^{-9}$ & 57/1/41 \\
+\egmm{} vs \texttt{SklearnGMM} (Raw CPU) & \textbf{18/0/15} & $-0.1347$ & $0.386$ & \textbf{27.52$\times$} & $1.63\times 10^{-9}$ & 61/0/38 \\
+\egmm{} vs \texttt{TorchBatchGMM\_fullinit} & \textbf{19/0/14} & $-0.0890$ & $8.79\times 10^{-2}$ & \textbf{2.46$\times$} & $2.36\times 10^{-7}$ & 64/0/35 \\
+\midrule
+\multicolumn{7}{l}{\emph{C. Component \& fairness ablations on the 33 development datasets}} \\
+\egmm{} vs \texttt{EGMM\_no\_revival} & \textbf{24/7/2} & $-0.2389$ & $1.16\times 10^{-4}$ & 0.91$\times$ & $1.71\times 10^{-5}$ & 61/34/4 \\
+\egmm{} vs \texttt{OnlineGMM\_matched\_polish} & \textbf{24/1/8} & $-0.1804$ & $1.12\times 10^{-4}$ & \textbf{1.19$\times$} & $4.11\times 10^{-3}$ & 70/4/25 \\
+\egmm{} vs \texttt{EGMM\_polish0} & \textbf{21/5/7} & $-0.0641$ & $6.47\times 10^{-3}$ & 0.81$\times$ & $3.86\times 10^{-6}$ & 60/16/23 \\
+\egmm{} vs \texttt{EGMM\_no\_init\_scale} & \textbf{12/13/8} & $+0.0000$ & $0.863$ & 0.99$\times$ & $0.560$ & 30/41/28 \\
+\egmm{} vs \texttt{EGMM\_bracket\_law} & \textbf{8/21/4} & $+0.0000$ & $0.863$ & 0.99$\times$ & $0.560$ & 23/61/15 \\
+\texttt{EGMM\_polish0} vs \texttt{TorchBatchGMM} & \textbf{18/0/15} & $-0.0155$ & $0.863$ & \textbf{3.23$\times$} & $3.10\times 10^{-8}$ & 54/2/43 \\
+\texttt{EGMM\_polish0} vs \texttt{OnlineGMM\_tuned} & \textbf{21/1/11} & $-0.1208$ & $0.373$ & \textbf{1.23$\times$} & $2.06\times 10^{-3}$ & 63/4/32 \\
+\midrule
+\multicolumn{7}{l}{\emph{D. Algorithm vs.\ engineering (separate systems run, 33 development datasets)}} \\
 \egmm{} vs \texttt{EGMM\_eager} & 0/33/0 & $+0.0000$ & -- & \textbf{1.95$\times$} & $1.16\times 10^{-9}$ & 0/99/0 \\
 \texttt{EGMM\_eager} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $6.91\times 10^{-4}$ & \textbf{1.26$\times$} & $4.17\times 10^{-3}$ & 69/2/28 \\
 \egmm{} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $6.91\times 10^{-4}$ & \textbf{2.54$\times$} & $4.66\times 10^{-9}$ & 69/2/28 \\

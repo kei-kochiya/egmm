@@ -41,11 +41,11 @@ TEX_NAME = {
     "StandardizedSklearnGMM": r"\texttt{StdSklearnGMM} (CPU)",
     "SklearnGMM": r"\texttt{SklearnGMM} (Raw CPU)",
     "EGMM_polish0": r"\texttt{EGMM\_polish0}",
-    "TorchBatchGMM_fullinit": r"\texttt{TorchBatch\_fullinit}",
+    "TorchBatchGMM_fullinit": r"\texttt{TorchBatchGMM\_fullinit}",
     "EGMM_no_init_scale": r"\texttt{EGMM\_no\_init\_scale}",
     "EGMM_no_revival": r"\texttt{EGMM\_no\_revival}",
     "EGMM_bracket_law": r"\texttt{EGMM\_bracket\_law}",
-    "OnlineGMM_matched_polish": r"\texttt{OnlineGMM\_matched\_pol}",
+    "OnlineGMM_matched_polish": r"\texttt{OnlineGMM\_matched\_polish}",
     "EGMM_eager": r"\texttt{EGMM\_eager}",
     "TorchBatchGMM_f32chol": r"\texttt{TorchBatch\_f32chol}",
 }
@@ -465,6 +465,16 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
         macros["ETimePerPassRatio"] = f"{tpp.median():.2f}"
         g_sp = float(sys_rows[0][2]["med_spd"]); a_sp = float(sys_rows[1][2]["med_spd"]); t_sp = float(sys_rows[2][2]["med_spd"])
         macros["EGraphShare"] = f"{100 * math.log(g_sp) / math.log(t_sp):.0f}"
+        # the decomposition by size: launch/sync-bound small fits vs larger fits
+        tgN = sysdf.groupby(["dataset", "method"])["fit_time"].mean().unstack()
+        nN = sysdf.groupby("dataset")["N_train"].first()
+        for tag, msk in [("Small", nN <= LARGE_N), ("Large", nN > LARGE_N)]:
+            macros["E" + tag + "Graph"] = f"{(tgN['EGMM_eager'] / tgN['EGMM'])[msk].median():.2f}"
+            macros["E" + tag + "Alg"] = f"{(tgN['TorchBatchGMM'] / tgN['EGMM_eager'])[msk].median():.2f}"
+            macros["E" + tag + "Total"] = f"{(tgN['TorchBatchGMM'] / tgN['EGMM'])[msk].median():.2f}"
+            macros["nSys" + tag] = str(int(msk.sum()))
+        lines.append("  by size (N <= 1e5 / > 1e5): graph " + macros["ESmallGraph"] + " / " + macros["ELargeGraph"]
+                     + ", algorithm " + macros["ESmallAlg"] + " / " + macros["ELargeAlg"] + ", total " + macros["ESmallTotal"] + " / " + macros["ELargeTotal"])
         if len(sys_rows) >= 5:  # decomposition against batch EM with e-GMM's float32 inner Cholesky
             a_f = float(sys_rows[3][2]["med_spd"]); t_f = float(sys_rows[4][2]["med_spd"])
             macros["EGraphShareF"] = f"{100 * math.log(g_sp) / math.log(t_f):.0f}" if t_f > 1 else "--"
@@ -601,6 +611,12 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
             if m in hd["dead_components"]:
                 macros["HDead" + "".join(ch for ch in m if ch.isalpha())] = f"{hd['dead_components'][m].mean():.2f}"
         macros["HRevivalsEGMM"] = f"{hd['revivals']['EGMM'].mean():.2f}"
+        har = ho.groupby(["dataset", "method"])["ari"].mean().unstack().dropna(how="all")
+        macros["nHLabeled"] = str(int(har["EGMM"].notna().sum()))
+        for m, tg in [("EGMM", "EGMM"), ("TorchBatchGMM", "TB"), ("StandardizedSklearnGMM", "SK"), ("OnlineGMM_tuned", "Online")]:
+            if m in har.columns:
+                macros["HARI" + tg] = f"{har[m].mean():.3f}"
+        lines.append("Holdout mean ARI (labelled datasets): " + ", ".join(f"{m}={har[m].mean():.3f}" for m in har.columns))
         worst = hd["dead_components"]["EGMM"].sort_values(ascending=False)
         macros["HDeadWorst"] = join_and(
             f"\\texttt{{{dn.replace('_', chr(92) + '_')}}} ({worst[dn]:.1f}/{int(hmeta.loc[dn, 'K'])})" for dn in worst.index[:2])
@@ -630,6 +646,7 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
         hop = ho.assign(passes=data_passes(ho)).groupby(["dataset", "method"])["passes"].mean().unstack()
         macros["HPassesEGMM"] = f"{hop['EGMM'].median():.1f}"
         macros["HPassesTB"] = f"{hop['TorchBatchGMM'].median():.1f}"
+        macros["HPassesOnline"] = f"{hop['OnlineGMM_tuned'].median():.0f}"
         lines.append(f"Holdout median full-data passes: EGMM={hop['EGMM'].median():.1f}, TorchBatchGMM={hop['TorchBatchGMM'].median():.1f}")
         lines.append("Holdout mean dead components: " + ", ".join(f"{m}={hd['dead_components'][m].mean():.2f}" for m in hd["dead_components"].columns))
 
@@ -713,7 +730,7 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
             macros[t + "WTL"] = res["wtl"]
             macros[t + "DegWTL"] = res["deg_wtl"]
             macros[t + "DegP"] = fmt_p(res["deg_p"]).strip("$")
-        name = {"TorchBatchGMM": r"\texttt{TorchBatchGMM}", "TorchBatchGMM_fullinit": r"\texttt{TorchBatch\_fullinit}",
+        name = {"TorchBatchGMM": r"\texttt{TorchBatchGMM}", "TorchBatchGMM_fullinit": r"\texttt{TorchBatchGMM\_fullinit}",
                 "BatchEM_converged": r"Batch EM, full init, converged$^\dagger$", "StandardizedSklearnGMM": r"\texttt{StdSklearnGMM}",
                 "OnlineGMM_tuned": r"\texttt{OnlineGMM\_tuned}"}
         t_rb = [
@@ -732,29 +749,30 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
         spd = bold_if(f"{s['med_spd']:.2f}$\\times$", good_t)
         return f"{name} & {wtl_s} & ${s['med_dnll']:+.4f}$ & {fmt_p(s['p_nll'])} & {spd} & {fmt_p(s['p_time'])} & {s['seed_W']}/{s['seed_T']}/{s['seed_L']} \\\\"
 
-    t1 = [
-        f"\\multicolumn{{7}}{{l}}{{\\emph{{A. All {n_ds} development datasets (3-seed means; Friedman $\\chi^2_F = {f_stat:.2f}$, $p = {fmt_p(f_p).strip('$')}$)}}}} \\\\"
-    ]
+    # Main Table 1: A = pre-registered holdout, B = development suite, C = ablations, D = systems run.
+    # Appendix table: E = large-N subset, F = later-added development datasets.
+    t1 = []
+    if ho_rows:
+        t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{A. Pre-registered holdout ({macros['nHoldout']} new OpenML datasets, code frozen before fitting)}}}} \\\\")
+        t1 += [t1_row(a, b, st) for a, b, st in ho_rows]
+        t1.append("\\midrule")
+    t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{B. All {n_ds} development datasets (Friedman $\\chi^2_F = {f_stat:.2f}$, $p = {fmt_p(f_p).strip('$')}$)}}}} \\\\")
     t1 += [t1_row(a, b, s) for a, b, s in panel_a]
     t1.append("\\midrule")
-    t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{B. Large-scale subset ($N_{{\\mathrm{{train}}}} > 10^5$, $n = {len(large)}$)}}}} \\\\")
-    t1 += [t1_row(a, b, s) for a, b, s in panel_b]
-    t1.append("\\midrule")
-    t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{C. The {len(held)} development datasets added after the original rules were set}}}} \\\\")
-    t1 += [t1_row(a, b, s) for a, b, s in panel_h]
-    t1.append("\\midrule")
-    t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{D. Component \\& fairness ablations across all {n_ds} datasets}}}} \\\\")
-    short = {"TorchBatchGMM": r"\texttt{TorchBatch}", "OnlineGMM_tuned": r"\texttt{OnlineGMM}"}
+    t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{C. Component \\& fairness ablations on the {n_ds} development datasets}}}} \\\\")
+    short = {}
     t1 += [t1_row(a, b, s, short.get(b) if a == "EGMM_polish0" else None) for a, b, s in abl_rows]
-    if ho_rows:
-        t1.append("\\midrule")
-        t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{E. Pre-registered fresh holdout ({macros['nHoldout']} new OpenML datasets, code frozen before fitting)}}}} \\\\")
-        t1 += [t1_row(a, b, st) for a, b, st in ho_rows]
     if sys_rows:
         t1.append("\\midrule")
-        t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{F. Algorithm vs.\\ engineering (separate systems run, {macros['nSys']} datasets)}}}} \\\\")
+        t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{D. Algorithm vs.\\ engineering (separate systems run, {macros['nSys']} development datasets)}}}} \\\\")
         t1 += [t1_row(a, b, st) for a, b, st in sys_rows]
     (GEN / "tab_wilcoxon_main.tex").write_text("\n".join(t1) + "\n", encoding="utf-8")
+    t1x = [f"\\multicolumn{{7}}{{l}}{{\\emph{{E. Large-scale development subset ($N_{{\\mathrm{{train}}}} > 10^5$, $n = {len(large)}$)}}}} \\\\"]
+    t1x += [t1_row(a, b, s) for a, b, s in panel_b]
+    t1x.append("\\midrule")
+    t1x.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{F. The {len(held)} development datasets added after the original rules were set}}}} \\\\")
+    t1x += [t1_row(a, b, s) for a, b, s in panel_h]
+    (GEN / "tab_wilcoxon_extra.tex").write_text("\n".join(t1x) + "\n", encoding="utf-8")
 
     # ---------------- Table 2 (33 datasets, mean +- std)
     cols_nll = ["EGMM", "EGMM_polish0", "TorchBatchGMM", "OnlineGMM_tuned", "StandardizedSklearnGMM", "SklearnGMM"]

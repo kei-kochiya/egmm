@@ -32,8 +32,14 @@ authoritative source; this note only explains what was run and why.
   p = 0.012). The closing polish does not help on the holdout and collapses components on discrete-valued
   data (ailerons); eeg_eye_state's NLL is decided by one outlier test row. Raw scikit-learn failed to initialize on `dionis` (all 3 seeds); the
   failure is recorded in the CSV (`error` column) and excluded only from that method's comparison.
-* Systems decomposition: CUDA graph alone 1.56x; algorithm alone 1.28x (3.8x fewer data passes, costlier
-  passes); combined 2.20x over `TorchBatchGMM`.
+* Systems decomposition (systems run, all methods interleaved in one session): CUDA graph alone 1.95x;
+  algorithm alone (both eager) 1.26x; combined 2.54x over `TorchBatchGMM`. A control batch EM with e-GMM's
+  float32 inner Cholesky (`TorchBatchGMM_f32chol`, defined in the harness, not the library) is as fast as
+  `TorchBatchGMM` (median time ratio 1.00), so batch EM's float64 Cholesky is not the reason for the gap.
+  The split depends on size: N <= 1e5 (26 datasets) graph 2.04x / algorithm 1.12x; N > 1e5 (7 datasets)
+  graph 1.57x / algorithm 2.11x (total 4.39x). e-GMM needs ~4x fewer E-step passes but not fewer M-steps
+  (median 42 covariance factorizations vs 37.7 batch-EM iterations). Most holdout fits are latency-bound
+  (batch EM at 1-5 ms per iteration on 15 of 16 datasets).
 
 ## Negative results worth knowing
 

@@ -56,6 +56,7 @@ EGMM_eager vs TorchBatchGMM    (n=33): W/T/L=24/0/9, med_dNLL=-0.3346, med_spd=1
 EGMM vs TorchBatchGMM    (n=33): W/T/L=24/0/9, med_dNLL=-0.3346, med_spd=2.54x (faster on 31; all seeds 30), p_time=4.657e-09 [1.164e-09]
 EGMM_eager vs TorchBatchGMM_f32chol (n=33): W/T/L=24/0/9, med_dNLL=-0.3346, med_spd=1.28x (faster on 22; all seeds 19), p_time=0.004172 [0.002086]
 EGMM vs TorchBatchGMM_f32chol (n=33): W/T/L=24/0/9, med_dNLL=-0.3346, med_spd=2.55x (faster on 31; all seeds 31), p_time=4.657e-09 [1.164e-09]
+  by size (N <= 1e5 / > 1e5): graph 2.04 / 1.57, algorithm 1.12 / 2.11, total 2.52 / 4.39
   float64 vs float32 inner Cholesky in batch EM: median time ratio 1.00 (max 1.22); shares vs f32chol batch EM: graph 72%, algorithm 27%
   absolute fit-time ratio between sessions (head-to-head / systems): EGMM median 1.01 (range 0.63-3.06), TorchBatchGMM median 1.08 (range 0.50-3.01)
   timing sessions: median speedup vs TB 2.35x (head-to-head) vs 2.54x (systems); faster on 31 vs 31; max per-dataset shift 1.98x; EGMM time ratio between sessions median 1.01 (range 0.63-3.06)
@@ -73,6 +74,7 @@ EGMM vs TorchBatchGMM_fullinit   (n=16): W/T/L=10/0/6, med_dNLL=-0.0802, p_nll=1
 Holdout Friedman chi2=17.77, p=0.00683; ranks: StandardizedSklearnGMM=2.80, EGMM=3.13, TorchBatchGMM=3.20, OnlineGMM_tuned=4.40, EMeansInitGMM=4.47, SklearnGMM=4.60, NaiveMinibatchGMM=5.40
   ranks without eeg_eye_state/ailerons (n=13): StandardizedSklearnGMM=2.38, TorchBatchGMM=2.77, EGMM=2.92, OnlineGMM_tuned=4.15, EMeansInitGMM=4.85, SklearnGMM=4.92, NaiveMinibatchGMM=6.00
   ranks with failed fits ranked last (n=16): EGMM=3.00, StandardizedSklearnGMM=3.00, TorchBatchGMM=3.19, OnlineGMM_tuned=4.25, EMeansInitGMM=4.44, SklearnGMM=4.75, NaiveMinibatchGMM=5.38
+Holdout mean ARI (labelled datasets): EGMM=0.120, EGMM_polish0=0.119, EMeansInitGMM=0.111, NaiveMinibatchGMM=0.120, OnlineGMM_tuned=0.119, SklearnGMM=0.122, StandardizedSklearnGMM=0.119, TorchBatchGMM=0.126, TorchBatchGMM_fullinit=0.123
 Holdout EGMM vs EGMM_polish0: W/T/L=10/1/5; largest polish damage: eeg_eye_state=+278920.1, ailerons=+29368.6, elevators=+4.9
 Holdout EGMM_polish0 vs OnlineGMM_tuned: W/T/L=12/0/4, raw p=0.07391
 Holdout median full-data passes: EGMM=10.0, TorchBatchGMM=44.7
