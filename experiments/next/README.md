@@ -10,15 +10,25 @@ the submitted paper; results land in `docs/experiments/next/`.
    (`TorchBatchGMM_graph`)? (`experiments/next/baselines_fast.py`; both stop at the same iteration as
    `TorchBatchGMM`, checked by `tests/test_next_baselines.py`.)
 2. **Large N.** Does the algorithmic advantage (fewer data passes) grow at 10^6-10^7 training rows, where
-   batch EM is no longer launch-bound? Synthetic mixtures (1M, 3M, 10M rows) need no download; real large
-   datasets (UCI HIGGS, SUSY) are read from `data/large/` only if the author downloads them.
+   batch EM is no longer launch-bound? Synthetic mixtures (1M, 3M, 10M rows) need no download. Real large
+   datasets are read from `data/large/`: SUSY from UCI (`SUSY.csv.gz`, 5M rows x 18), and HIGGS from the
+   Hugging Face mirror `jxie/higgs` (`data/large/higgs_hf/*.parquet`, SHA-256 checked): the 11M UCI rows in
+   their original order with every feature z-scored, which leaves all methods' fits and NLL differences
+   unchanged (every method standardizes internally) and shifts absolute NLLs by a constant.
 3. **Restarts at equal compute.** Can best-of-R e-GMM restarts, within batch EM's time budget, reach a
    better test likelihood than batch EM? Evaluated offline from independent single-start fits, with two
    selection rules (training log-likelihood; validation NLL).
 
+4. **External review (review.txt) requests**, all without library changes (`experiments/next/variants.py`):
+   eager e-GMM without the per-step alpha synchronization (`EGMM_eager_hostalpha`); single-factor schedule
+   ablations inside the full e-GMM pipeline (`EGMM_sched_rm`: alpha_t = (t + 2)^-0.7; `EGMM_sched_const`:
+   the cosine schedule's mean); on the holdout (post hoc) `OnlineGMM_tuned`, `OnlineGMM_matched_polish`
+   and `EGMM_no_revival`; and a `diag` stage on the 8 diagonal development datasets plus volkert and isolet
+   (`alpha = 0.85`, twice the epochs with the same polish budget, polish without early stopping, no polish).
+
 ## Protocol
 
-* `python experiments/next/run_next.py --stages dev,holdout,large` (GPU), then
+* `python experiments/next/run_next.py --stages dev,holdout,diag,large` (GPU), then
   `python experiments/next/analyze_next.py` -> `docs/experiments/next/summary.txt`.
 * Same harness as the paper (`evaluate_model`: GPU clock warm-up, median of 5 timed refits, 3 seeds,
   shuffled method order); every stage interleaves all its methods in one session, so speedups are never
@@ -44,5 +54,5 @@ the submitted paper; results land in `docs/experiments/next/`.
 
 ## Runtime estimate (RTX 5070)
 
-`dev` ~60-75 min, `holdout` ~15-20 min, `large` ~30-45 min (10M-row sets take ~2 GB of RAM each and are
-generated one at a time).
+`dev` ~80-100 min, `holdout` ~25-30 min (includes online-EM tuning), `diag` ~20-30 min, `large` ~45-60 min
+with SUSY and HIGGS (10M-row sets take ~2 GB of RAM each and are generated one at a time); ~3-3.5 h total.

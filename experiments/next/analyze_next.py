@@ -103,6 +103,17 @@ def equal_compute(rt: pd.DataFrame, df: pd.DataFrame, base: str, rule: str, line
                  f"{int((pk['R'] < 1.5).sum())}/{len(pk)} datasets) W/T/L={w}/{t}/{l} med_dNLL={d.median():+.4f} raw p={fmt_p_txt(p)}")
 
 
+def diag_table(df: pd.DataFrame, lines: list[str]) -> None:
+    """High-dimensional diagonal diagnostics: per-dataset dNLL of each variant relative to the default e-GMM."""
+    lines.append("\n=== diag: test NLL relative to default e-GMM (EGMM_r0), 3-seed means; negative = variant better ===")
+    g = df.groupby(["dataset", "method"])["test_nll"].mean().unstack()
+    meta = df.groupby("dataset")[["N_train", "D", "regime"]].first()
+    cols = [c for c in ["EGMM_polish0", "EGMM_a085", "EGMM_ep2x", "EGMM_notol", "TorchBatchGMM", "TorchBatchGMM_graph"] if c in g.columns]
+    lines.append(f"{'dataset':28s} {'regime':10s} " + " ".join(f"{c[:14]:>14s}" for c in cols))
+    for ds in meta.sort_values(["regime", "D"]).index:
+        lines.append(f"{ds:28s} {meta.loc[ds, 'regime'][:10]:10s} " + " ".join(f"{g.loc[ds, c] - g.loc[ds, 'EGMM_r0']:+14.3f}" for c in cols))
+
+
 def large_table(df: pd.DataFrame, lines: list[str]) -> None:
     lines.append("\n=== Large-N: per-dataset 3-seed means (time in s; NLL) ===")
     g = df.groupby(["dataset", "method"])[["fit_time", "test_nll"]].mean().unstack()
@@ -126,7 +137,7 @@ def main() -> None:
     ap.add_argument("--prefix", default="")
     args = ap.parse_args()
     lines = ["Next-version experiments (development analyses; see experiments/next/README.md)"]
-    for stage in ["dev", "holdout", "large"]:
+    for stage in ["dev", "holdout", "diag", "large"]:
         f = NEXT / f"{args.prefix}{stage}.csv"
         if not f.exists():
             continue
@@ -134,8 +145,17 @@ def main() -> None:
         lines.append(f"\n##### stage {stage}: {df['dataset'].nunique()} datasets, {len(df)} fits")
         pairs(df, "EGMM_r0", BATCH, lines, f"{stage}: e-GMM (single start) vs batch EM variants")
         pairs(df, "TorchBatchGMM_graph", ["TorchBatchGMM", "TorchBatchGMM_fast"], lines, f"{stage}: batch EM variants")
-        if "EGMM_eager" in set(df["method"]):
-            pairs(df, "EGMM_r0", ["EGMM_eager"], lines, f"{stage}: CUDA graph effect")
+        meths = set(df["method"])
+        if "EGMM_eager" in meths:
+            pairs(df, "EGMM_r0", ["EGMM_eager", "EGMM_eager_hostalpha"], lines, f"{stage}: CUDA graph effect (with and without the per-step alpha sync)")
+            pairs(df, "EGMM_eager_hostalpha", BATCH, lines, f"{stage}: algorithm alone (sync-free eager e-GMM vs batch EM variants)")
+        if "EGMM_sched_rm" in meths:
+            pairs(df, "EGMM_r0", ["EGMM_sched_rm", "EGMM_sched_const"], lines, f"{stage}: single-factor schedule ablation (cosine vs Robbins-Monro / constant)")
+        if "OnlineGMM_matched_polish" in meths:
+            pairs(df, "EGMM_r0", ["OnlineGMM_tuned", "OnlineGMM_matched_polish", "EGMM_no_revival"], lines,
+                  f"{stage}: online EM with matched polish, and revival (post hoc)")
+        if stage == "diag":
+            diag_table(df, lines)
         n_max = int(df["method"].str.extract(r"^EGMM_r(\d+)$")[0].dropna().astype(int).max() + 1) if df["method"].str.match(r"^EGMM_r\d+$").any() else 0
         if n_max >= 2:
             rt = restart_table(df, n_max)

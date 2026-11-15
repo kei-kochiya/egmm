@@ -72,21 +72,54 @@ REAL_LARGE = {
 }
 
 
+# Hugging Face mirror jxie/higgs (downloaded because the UCI server delivered ~0.15 MB/s): the 11,000,000
+# UCI HIGGS rows in the original order (10.5M train + 0.5M test), with every feature z-scored (mean 0, std 1;
+# UCI row 1 maps exactly onto the mirror's row 1 after standardization). All methods standardize internally,
+# so fitted models and NLL differences between methods are unchanged; absolute NLLs shift by a constant
+# log-Jacobian and are not comparable with raw-unit HIGGS numbers. Files verified against their SHA-256.
+HIGGS_PARQUET = "higgs_hf"
+
+
+def _load_higgs_parquet(folder: Path, max_rows: int | None):
+    """Train shards then test (UCI order); columns `inputs` (28 float64) and `label`. SHA-256 checked at download."""
+    import pyarrow.parquet as pq
+
+    files = sorted(folder.glob("train-*.parquet")) + sorted(folder.glob("test-*.parquet"))
+    if len(files) != 6:
+        return None, None
+    parts, labels, n = [], [], 0
+    for f in files:
+        t = pq.read_table(f, columns=["inputs", "label"])
+        X = t.column("inputs").combine_chunks().flatten().to_numpy().reshape(t.num_rows, -1).astype(np.float32)
+        parts.append(X)
+        labels.append(t.column("label").to_numpy().astype(np.int32))
+        n += t.num_rows
+        if max_rows is not None and n >= max_rows:
+            break
+    X, y = np.concatenate(parts), np.concatenate(labels)
+    return (X[:max_rows], y[:max_rows]) if max_rows is not None else (X, y)
+
+
 def load_real_large(key: str, seed: int = 41001, max_rows: int | None = None) -> DatasetSplit | None:
-    """Read a local CSV(.gz) chunk-wise into float32; returns None when the file is not present."""
+    """Read a local file into float32 (CSV(.gz) chunk-wise, or the HIGGS Parquet mirror); None when absent."""
     fname, label_col, K, cov = REAL_LARGE[key]
     path = ROOT / "data" / "large" / fname
-    if not path.exists():
+    if key == "higgs" and not path.exists():
+        X, y = _load_higgs_parquet(ROOT / "data" / "large" / HIGGS_PARQUET, max_rows)
+        if X is None:
+            return None
+    elif not path.exists():
         return None
-    import pandas as pd
+    else:
+        import pandas as pd
 
-    parts, labels = [], []
-    for chunk in pd.read_csv(path, header=None, chunksize=1_000_000, dtype=np.float32, nrows=max_rows):
-        arr = chunk.to_numpy(dtype=np.float32, copy=False)
-        labels.append(arr[:, label_col].astype(np.int32))
-        parts.append(np.delete(arr, label_col, axis=1))
-    X = np.concatenate(parts)
-    y = np.concatenate(labels)
+        parts, labels = [], []
+        for chunk in pd.read_csv(path, header=None, chunksize=1_000_000, dtype=np.float32, nrows=max_rows):
+            arr = chunk.to_numpy(dtype=np.float32, copy=False)
+            labels.append(arr[:, label_col].astype(np.int32))
+            parts.append(np.delete(arr, label_col, axis=1))
+        X = np.concatenate(parts)
+        y = np.concatenate(labels)
     keep = np.isfinite(X).all(axis=1)
     X, y = X[keep], y[keep]
     X_tr, X_va, X_te, y_te = _split_float32(X, y, seed)
