@@ -48,14 +48,15 @@ def plot_scaling_laws_individual(csv_path: Path, out_dir: Path) -> None:
                 linewidth=2.2,
                 markersize=6,
                 color=colors[i % len(colors)],
-                label=f"T = {T} epochs",
+                label=f"E = {T} epochs",
             )
         ax.axhline(0.0, color="#222222", linestyle="--", linewidth=1.2, label="50-iter Batch EM baseline")
         ax.set_xscale("log")
-        alpha_ticks = [0.05, 0.12, 0.25, 0.45, 0.7]
+        alpha_ticks = [0.05, 0.12, 0.25, 0.45, 0.7, 0.85]
         ax.xaxis.set_major_locator(mticker.FixedLocator(alpha_ticks))
-        ax.xaxis.set_major_formatter(mticker.FixedFormatter(["0.05", "0.12", "0.25", "0.45", "0.70"]))
+        ax.xaxis.set_major_formatter(mticker.FixedFormatter(["0.05", "0.12", "0.25", "0.45", "0.70", "0.85"]))
         ax.xaxis.set_minor_locator(mticker.NullLocator())
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
         ax.set_xlabel(r"Peak EMA step size $\alpha_0$ (log scale)")
         ax.set_ylabel(r"Median Validation $\Delta$NLL (lower is better)")
         cov_title = "Diagonal Covariance" if cov_type == "diag" else "Full Covariance"
@@ -104,10 +105,18 @@ def plot_pareto_individual(csv_path: Path, out_dir: Path) -> None:
                 markersize=5.5,
                 label=lbl,
             )
+        others = sub[sub["method"] != "SklearnGMM"]["test_nll"]
+        sk = sub[sub["method"] == "SklearnGMM"]["test_nll"]
+        lo, hi = float(others.min()), float(others.max())
+        span = max(hi - lo, 1e-6)
+        if len(sk) and (sk.min() < lo - 1.5 * span or sk.max() > hi + 1.5 * span):
+            ax.set_ylim(lo - 0.15 * span, hi + 0.15 * span)
+            ax.text(0.98, 0.04, f"raw SklearnGMM off-scale (NLL {sk.min():.1f} to {sk.max():.1f})",
+                    transform=ax.transAxes, ha="right", va="bottom", fontsize=8, color="#555555")
         ax.set_xscale("log")
         ax.set_title(nice_titles.get(ds_name, ds_name))
         ax.set_xlabel("Wall-Clock Fit Time (s, log scale)")
-        ax.set_ylabel("Held-Out Test NLL (lower = better)")
+        ax.set_ylabel("Test NLL (lower = better)")
         ax.grid(True, which="both", alpha=0.25)
         ax.legend(frameon=True, facecolor="white", framealpha=0.92, loc="best")
         fig.tight_layout()
@@ -174,7 +183,7 @@ def plot_cd_ranks(csv_path: Path, out_path: Path) -> None:
             bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.6, "alpha": 0.88},
         )
 
-    ax.set_xlabel(f"Mean Held-Out Test NLL Rank Across {n_d} Datasets (1 = best)")
+    ax.set_xlabel(f"Mean Test NLL Rank Across {n_d} Development Datasets (1 = best)")
     ax.set_title(f"Mean Test NLL Ranks & Nemenyi Critical Difference (CD = {cd:.2f}, p < 0.05)")
     ax.legend(frameon=True, facecolor="white", framealpha=0.95, loc="upper right")
     ax.grid(True, axis="x", alpha=0.25)
@@ -387,7 +396,7 @@ def plot_speedup_vs_nll(csv_path: Path, out_path: Path) -> None:
         bbox={"boxstyle": "round,pad=0.35", "facecolor": "#eef8ee", "edgecolor": "#7ab87a", "alpha": 0.92},
     )
     ax.set_xlabel(r"Wall-Clock Speedup vs TorchBatchGMM (log scale, $>1\times$ = e-GMM faster)")
-    ax.set_ylabel(r"Held-Out Test $\Delta$NLL = e-GMM $-$ Batch ($<0$ = e-GMM better, symlog)")
+    ax.set_ylabel(r"Test $\Delta$NLL = e-GMM $-$ Batch ($<0$ = e-GMM better, symlog)")
     ax.set_title(f"e-GMM vs GPU TorchBatchGMM Across {n_total} Benchmark Datasets (3-Seed Mean)")
     ax.legend(frameon=True, facecolor="white", framealpha=0.94, loc="upper left")
     ax.grid(True, which="both", alpha=0.25)
@@ -414,17 +423,52 @@ def plot_small_dataset_generalization(csv_path: Path, out_path: Path) -> None:
     for col, c, mk, ls, lw, lbl in style:
         if col not in pt.columns:
             continue
-        ax.plot(pt["work"], pt[col] * 1e3, color=c, marker=mk, linestyle=ls, linewidth=lw, markersize=5.2, label=lbl)
+        ax.plot(pt["work"], pt[col] * 1e3, color=c, marker=mk, linestyle="none", markersize=5.6, label=lbl)
 
     ax.axvline(1.5e5, color="#888888", linestyle="--", linewidth=1.1, label="Full-cov auto CPU/CUDA switch (1.5e5)")
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_ylim(5.5, 1150.0)
-    ax.set_xlabel(r"Workload Complexity $N_{\mathrm{train}} \cdot K \cdot D$ (log scale, 16 Unseen Small Datasets)")
+    vals = pt[[c[0] for c in style if c[0] in pt.columns]].to_numpy() * 1e3
+    ax.set_ylim(0.8 * np.nanmin(vals), 1.6 * np.nanmax(vals))
+    ax.set_xlabel(r"Workload Complexity $N_{\mathrm{train}} \cdot K \cdot D$ (log scale; 16 small datasets)")
     ax.set_ylabel("Mean Wall-Clock Fit Time (ms, log scale)")
-    ax.set_title("Out-of-Suite Small-Dataset Scaling: Adaptive CPU/GPU Routing")
+    ax.set_title("Small Datasets: Adaptive CPU/GPU Routing")
     ax.grid(True, which="both", alpha=0.25)
-    ax.legend(frameon=True, facecolor="white", framealpha=0.95, loc="upper left", ncol=2, fontsize=8.0)
+    ax.legend(frameon=True, facecolor="white", framealpha=0.95, loc="upper center", bbox_to_anchor=(0.5, -0.18),
+              ncol=2, fontsize=8.0)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_holdout_dnll(csv_path: Path, out_path: Path, conv_path: Path | None = None) -> None:
+    """Per-dataset holdout differences (e-GMM minus baseline) on the datasets without metric artefacts."""
+    if not csv_path.exists():
+        return
+    df = pd.read_csv(csv_path)
+    if "error" in df.columns:
+        df = df[df["error"].isna()]
+    if conv_path is not None and conv_path.exists():
+        df = pd.concat([df, pd.read_csv(conv_path)], ignore_index=True)
+    m = df.groupby(["dataset", "method"])["test_nll"].mean().unstack()
+    meta = df.groupby("dataset")[["D", "cov_type"]].first()
+    m = m.drop(index=[d for d in ["eeg_eye_state", "ailerons"] if d in m.index])
+    base = [("TorchBatchGMM", "#1f77b4", "s", "TorchBatchGMM"),
+            ("StandardizedSklearnGMM", "#555555", "D", "StdSklearnGMM"),
+            ("OnlineGMM_tuned", "#2ca02c", "^", "OnlineGMM_tuned")]
+    order = (m["EGMM"] - m["TorchBatchGMM"]).sort_values().index
+    fig, ax = plt.subplots(figsize=(6.4, 4.0))
+    y = np.arange(len(order))
+    for j, (b, c, mk, lbl) in enumerate(base):
+        d = (m.loc[order, "EGMM"] - m.loc[order, b]).to_numpy()
+        ax.scatter(d, y + (j - 1) * 0.22, color=c, marker=mk, s=26, label=f"vs {lbl}", zorder=3)
+    ax.axvline(0.0, color="#222222", linewidth=1.0)
+    ax.set_yticks(y)
+    ax.set_yticklabels([f"{d} (D={int(meta.loc[d, 'D'])}, {meta.loc[d, 'cov_type']})" for d in order], fontsize=8.2)
+    ax.set_xlabel(r"Test $\Delta$NLL = e-GMM $-$ baseline (nats; $<0$ = e-GMM better)")
+    ax.set_title(f"Pre-registered holdout: {len(order)} datasets without metric artefacts")
+    ax.grid(True, axis="x", alpha=0.25)
+    ax.legend(frameon=True, facecolor="white", framealpha=0.95, loc="lower right", fontsize=8.0)
     fig.tight_layout()
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -438,4 +482,5 @@ if __name__ == "__main__":
     plot_cd_ranks(exp_dir / "benchmark_head_to_head.csv", exp_dir / "fig_cd_ranks.png")
     plot_speedup_vs_nll(exp_dir / "benchmark_head_to_head.csv", exp_dir / "fig_speedup_vs_nll.png")
     plot_small_dataset_generalization(exp_dir / "small_dataset_eval.csv", exp_dir / "fig_small_dataset_eval.png")
+    plot_holdout_dnll(exp_dir / "holdout_head_to_head.csv", exp_dir / "fig_holdout_dnll.png")
     print("Generated clean single-panel figures in docs/experiments/")

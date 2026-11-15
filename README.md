@@ -1,8 +1,8 @@
 # e-GMM
 
-**Fast and Collapse-Resistant Expectation–Maximization for Gaussian Mixture Models via Centered EMA and Wedderburn Eigen-Split Revival.**
+**Fast Online Expectation–Maximization for Gaussian Mixture Models on GPUs.**
 
-`EGMM` is a drop-in `scikit-learn`-compatible PyTorch/CUDA and CPU Gaussian Mixture estimator inspired by Meta FAIR's [`e-means`](docs/references/e_means/README.md) (`arXiv:2611.09501`), adapted to diagonal and full $D \times D$ covariance density modeling.
+`EGMM` is a `scikit-learn`-compatible PyTorch/CUDA and CPU Gaussian Mixture estimator: online EM on sufficient statistics with a finite-horizon cosine schedule and split-based revival of starved components, several choices borrowed from the k-means method `e-means` (`arXiv:2611.09501`), adapted to diagonal and full $D \times D$ covariance density modeling. It implements a subset of the `GaussianMixture` interface (no tied/spherical covariances, no `warm_start`).
 
 ## Key Features
 

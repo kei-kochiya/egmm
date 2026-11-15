@@ -9,11 +9,16 @@
 | PyTorch | 2.14.1+cu132 (CUDA 13.2, cuDNN 9.24) |
 | NumPy / SciPy / pandas | 2.5.3 / 1.18.1 / 3.0.5 |
 | scikit-learn | 1.9.1 (default threading: OpenBLAS 24 threads, OpenMP 28) |
+| PyTorch numerics | TF32 off (`torch.backends.cuda.matmul.allow_tf32 = False`, float32 matmul precision `"highest"`; PyTorch defaults, not changed by the code); CPU threads 20 (intra-op and inter-op defaults) |
+
+Exact package versions: [`requirements-lock.txt`](requirements-lock.txt). Check that the released logs reproduce
+every table and number of the paper: `python experiments/verify_tables.py`.
 
 Timing protocol: every timed PyTorch fit is preceded by `gc.collect()` and ~60 ms of GPU GEMMs (clock
-warm-up), synchronized, repeated 5 times (median reported); scikit-learn fits are timed once. Each process
-runs one untimed warm-up fit, so process start-up is excluded. The machine was not otherwise isolated;
-per-dataset times varied by up to about 2x between independent sessions (see the paper, Section 4).
+warm-up), synchronized, repeated 5 times (median reported; 3 times in the Pareto stage); scikit-learn fits are
+timed once. The head-to-head, small-dataset and systems stages run untimed warm-up fits first, so process
+start-up is excluded. The machine was not otherwise isolated; between independent sessions per-dataset
+speedups varied by up to about 2x and absolute times by more (see the paper, Section 4).
 
 ## Approximate wall-clock cost of the full reproduction
 

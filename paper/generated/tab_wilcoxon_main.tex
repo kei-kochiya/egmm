@@ -1,4 +1,4 @@
-\multicolumn{7}{l}{\emph{A. All 33 primary datasets (3-seed means; Friedman $\chi^2_F = 54.34$, $p = 6.31\times 10^{-10}$)}} \\
+\multicolumn{7}{l}{\emph{A. All 33 development datasets (3-seed means; Friedman $\chi^2_F = 54.34$, $p = 6.31\times 10^{-10}$)}} \\
 \egmm{} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $7.55\times 10^{-4}$ & \textbf{2.35$\times$} & $1.59\times 10^{-7}$ & 69/2/28 \\
 \egmm{} vs \texttt{OnlineGMM\_tuned} & \textbf{26/1/6} & $-0.2733$ & $3.11\times 10^{-4}$ & 0.85$\times$ & $9.33\times 10^{-2}$ & 76/5/18 \\
 \egmm{} vs \texttt{NaiveMinibatchGMM} & \textbf{33/0/0} & $-0.7427$ & $1.63\times 10^{-9}$ & 0.64$\times$ & $3.12\times 10^{-7}$ & 97/0/2 \\
@@ -16,7 +16,7 @@
 \egmm{} vs \texttt{SklearnGMM} (Raw CPU) & \textbf{5/0/2} & $-0.7065$ & $0.547$ & \textbf{202.27$\times$} & $0.109$ & 17/0/4 \\
 \egmm{} vs \texttt{TorchBatch\_fullinit} & 3/0/4 & $+0.0212$ & $0.938$ & \textbf{7.99$\times$} & $0.109$ & 12/0/9 \\
 \midrule
-\multicolumn{7}{l}{\emph{C. The 10 primary datasets added after the original rules were set}} \\
+\multicolumn{7}{l}{\emph{C. The 10 development datasets added after the original rules were set}} \\
 \egmm{} vs \texttt{TorchBatchGMM} & \textbf{7/0/3} & $-0.5488$ & $8.20\times 10^{-2}$ & \textbf{3.79$\times$} & $5.86\times 10^{-3}$ & 18/0/12 \\
 \egmm{} vs \texttt{OnlineGMM\_tuned} & \textbf{7/1/2} & $-0.6708$ & $8.20\times 10^{-2}$ & 0.87$\times$ & $0.375$ & 21/3/6 \\
 \egmm{} vs \texttt{StdSklearnGMM} (CPU) & 5/0/5 & $-0.0864$ & $0.492$ & \textbf{133.50$\times$} & $5.86\times 10^{-3}$ & 15/0/15 \\
@@ -30,7 +30,7 @@
 \texttt{EGMM\_polish0} vs \texttt{TorchBatch} & \textbf{18/0/15} & $-0.0155$ & $0.863$ & \textbf{3.23$\times$} & $3.10\times 10^{-8}$ & 54/2/43 \\
 \texttt{EGMM\_polish0} vs \texttt{OnlineGMM} & \textbf{21/1/11} & $-0.1208$ & $0.373$ & \textbf{1.23$\times$} & $2.06\times 10^{-3}$ & 63/4/32 \\
 \midrule
-\multicolumn{7}{l}{\emph{E. Pre-registered fresh holdout (16 new OpenML datasets, code frozen before download)}} \\
+\multicolumn{7}{l}{\emph{E. Pre-registered fresh holdout (16 new OpenML datasets, code frozen before fitting)}} \\
 \egmm{} vs \texttt{TorchBatchGMM} & \textbf{9/0/7} & $-0.1361$ & $1.000$ & \textbf{2.54$\times$} & $2.44\times 10^{-4}$ & 27/1/20 \\
 \egmm{} vs \texttt{OnlineGMM\_tuned} & \textbf{13/0/3} & $-1.1173$ & $1.17\times 10^{-2}$ & 0.96$\times$ & $0.645$ & 35/1/12 \\
 \egmm{} vs \texttt{NaiveMinibatchGMM} & \textbf{13/0/3} & $-2.0473$ & $0.392$ & 0.70$\times$ & $2.14\times 10^{-4}$ & 40/0/8 \\
@@ -40,6 +40,8 @@
 \egmm{} vs \texttt{TorchBatch\_fullinit} & \textbf{10/0/6} & $-0.0802$ & $1.000$ & \textbf{2.65$\times$} & $2.14\times 10^{-4}$ & 29/1/18 \\
 \midrule
 \multicolumn{7}{l}{\emph{F. Algorithm vs.\ engineering (separate systems run, 33 datasets)}} \\
-\egmm{} vs \texttt{EGMM\_eager} & 0/33/0 & $+0.0000$ & -- & \textbf{1.56$\times$} & $6.98\times 10^{-10}$ & 0/99/0 \\
-\texttt{EGMM\_eager} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $3.78\times 10^{-4}$ & \textbf{1.28$\times$} & $1.47\times 10^{-3}$ & 69/2/28 \\
-\egmm{} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $3.78\times 10^{-4}$ & \textbf{2.20$\times$} & $2.00\times 10^{-8}$ & 69/2/28 \\
+\egmm{} vs \texttt{EGMM\_eager} & 0/33/0 & $+0.0000$ & -- & \textbf{1.95$\times$} & $1.16\times 10^{-9}$ & 0/99/0 \\
+\texttt{EGMM\_eager} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $6.91\times 10^{-4}$ & \textbf{1.26$\times$} & $4.17\times 10^{-3}$ & 69/2/28 \\
+\egmm{} vs \texttt{TorchBatchGMM} & \textbf{24/0/9} & $-0.3346$ & $6.91\times 10^{-4}$ & \textbf{2.54$\times$} & $4.66\times 10^{-9}$ & 69/2/28 \\
+\texttt{EGMM\_eager} vs \texttt{TorchBatch\_f32chol} & \textbf{24/0/9} & $-0.3346$ & $6.91\times 10^{-4}$ & \textbf{1.28$\times$} & $4.17\times 10^{-3}$ & 70/2/27 \\
+\egmm{} vs \texttt{TorchBatch\_f32chol} & \textbf{24/0/9} & $-0.3346$ & $6.91\times 10^{-4}$ & \textbf{2.55$\times$} & $4.66\times 10^{-9}$ & 70/2/27 \\

@@ -36,12 +36,27 @@ class BracketLawEGMM(EGMM):
 class EagerEGMM(EGMM):
     """Systems ablation: identical algorithm, eager PyTorch execution (no CUDA graph).
 
-    Like TorchBatchGMM, the eager loop performs one host synchronization per step, so
-    EGMM_eager vs TorchBatchGMM compares the two algorithms at the same engineering level and
-    EGMM vs EGMM_eager isolates the CUDA-graph effect.
+    The eager loop performs one host synchronization per step (reading alpha_t), whereas TorchBatchGMM
+    performs two to three per iteration and TorchBatchGMM_f32chol one to two; EGMM vs EGMM_eager
+    isolates the CUDA-graph effect (an upper bound, because of that avoidable per-step sync).
     """
 
     _USE_CUDA_GRAPH = False
+
+
+class TorchBatchGMMF32Chol(TorchBatchGMM):
+    """Systems control: batch EM with e-GMM's inner-loop M-step numerics.
+
+    Identical to TorchBatchGMM except that every per-iteration projection uses the float32 Cholesky with
+    the branchless diagonal fallback and no ``info`` host synchronization (``fast_cholesky_f32=True,
+    allow_sync=False``), as e-GMM's EMA steps do. Final covariances stay float64 and scoring stays exact,
+    so test NLL remains comparable. Defined here, outside the frozen library.
+    """
+
+    def _moments_to_estep_params(self, M, S, Q, estep_dtype, *, allow_sync=True, fast_cholesky_f32=False):
+        return super()._moments_to_estep_params(
+            M, S, Q, estep_dtype, allow_sync=False, fast_cholesky_f32=(estep_dtype == torch.float32)
+        )
 
 
 def _sync(device: str) -> None:
@@ -470,6 +485,14 @@ def run_ablation_suite(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0
 def run_systems_ablation(datasets: list[DatasetSplit], seeds: tuple[int, ...] = (0, 1, 2)) -> pd.DataFrame:
     """Separate algorithmic from implementation effects in one harness pass (GPU methods only)."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda":  # untimed warm-up of every method's code paths (this stage may run on its own)
+        _w = torch.randn(4096, 16, device="cuda")
+        for cov_w in ("full", "diag"):
+            EGMM(4, cov_w, device="cuda", random_state=0).fit(_w)
+            EagerEGMM(4, cov_w, device="cuda", random_state=0).fit(_w)
+            TorchBatchGMM(n_components=4, covariance_type=cov_w, max_iter=5, device="cuda", random_state=0).fit(_w)
+            TorchBatchGMMF32Chol(n_components=4, covariance_type=cov_w, max_iter=5, device="cuda", random_state=0).fit(_w)
+        torch.cuda.synchronize()
     rows = []
     for ds in datasets:
         N, D = ds.X_train.shape
@@ -480,6 +503,9 @@ def run_systems_ablation(datasets: list[DatasetSplit], seeds: tuple[int, ...] = 
                 "EGMM": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
                 "EGMM_eager": EagerEGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
                 "TorchBatchGMM": TorchBatchGMM(
+                    n_components=K, covariance_type=cov, max_iter=50, tol=1e-3, device=device, random_state=seed
+                ),
+                "TorchBatchGMM_f32chol": TorchBatchGMMF32Chol(
                     n_components=K, covariance_type=cov, max_iter=50, tol=1e-3, device=device, random_state=seed
                 ),
             }

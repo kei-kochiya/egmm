@@ -2,9 +2,11 @@
 
     python experiments/make_supplementary.py            # -> dist/supplementary_anonymized.zip
 
-Included: README.md, pyproject.toml, src/, tests/, experiments/ (scripts), docs/experiments/ (CSV logs,
-figures, findings, pre-registration). Excluded: .git, data/, paper/ (manuscript source carries the author
-block), handoff.md and review notes, third-party mirrors (docs/references/), caches.
+Included: README.md, ENVIRONMENT.md, pyproject.toml, requirements-lock.txt, src/, tests/, experiments/
+(scripts), docs/experiments/ (CSV logs, figures, findings, pre-registration), and paper/generated/ (the table
+bodies and number macros the manuscript inputs, so experiments/verify_tables.py can check them). Excluded:
+.git, data/, the rest of paper/ (manuscript source carries the author block), handoff.md and review notes,
+third-party mirrors (docs/references/), caches.
 
 Identifying strings are collected at build time (git user.name / user.email, every commit author, and the
 \\author{...} block of paper/main.tex) and the build fails if any of them occurs in an included file, so
@@ -21,7 +23,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "dist" / "supplementary_anonymized.zip"
-INCLUDE = ["README.md", "ENVIRONMENT.md", "pyproject.toml", "src", "tests", "experiments", "docs/experiments"]
+INCLUDE = ["README.md", "ENVIRONMENT.md", "pyproject.toml", "requirements-lock.txt", "src", "tests", "experiments",
+           "docs/experiments", "paper/generated"]
 SKIP_PARTS = {"__pycache__", ".pytest_cache", ".ipynb_checkpoints"}
 SKIP_SUFFIX = {".pyc", ".pyo"}
 MAX_BYTES = 100 * 1024 * 1024
@@ -83,31 +86,18 @@ def check_pdf(bad: list[str]) -> int:
 
 
 def self_test() -> bool:
-    """Unpack the archive into a clean folder, re-run the analysis from its own logs, compare with paper/generated."""
-    import filecmp
+    """Unpack the archive into a clean folder and run its own experiments/verify_tables.py there: the analysis
+    is re-run from the archive's CSV logs and compared byte for byte with the archive's copy of paper/generated
+    (the table bodies and number macros the manuscript inputs). Reviewers can run the same script."""
     import tempfile
 
-    gen = ROOT / "paper" / "generated"
     with tempfile.TemporaryDirectory() as tmp:
         with zipfile.ZipFile(OUT) as zf:
             zf.extractall(tmp)
         base = Path(tmp) / "egmm_supplementary"
-        out_gen = Path(tmp) / "regen"
-        env = {**__import__("os").environ, "PYTHONPATH": str(base / "src") + __import__("os").pathsep + str(base)}
-        r = subprocess.run(
-            [sys.executable, str(base / "experiments" / "analyze_results.py"), "--in-exp", str(base / "docs" / "experiments"),
-             "--out-exp", str(Path(tmp) / "regen_exp"), "--out-gen", str(out_gen)],
-            capture_output=True, text=True, env=env,
-        )
-        if r.returncode != 0:
-            print(r.stderr[-2000:], file=sys.stderr)
-            return False
-        bad = [f.name for f in sorted(gen.glob("*.tex")) if not (out_gen / f.name).exists() or not filecmp.cmp(f, out_gen / f.name, shallow=False)]
-        if bad:
-            print("regenerated files differ from paper/generated: " + ", ".join(bad), file=sys.stderr)
-            return False
-        print(f"self-test passed: analysis re-run from the archive reproduces all {len(list(gen.glob('*.tex')))} generated paper files")
-        return True
+        r = subprocess.run([sys.executable, str(base / "experiments" / "verify_tables.py")], capture_output=True, text=True)
+        print((r.stdout or r.stderr).strip()[-2000:])
+        return r.returncode == 0
 
 
 def main() -> int:
