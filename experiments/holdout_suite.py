@@ -88,11 +88,28 @@ def load_holdout_suite(data_home: str = "data/openml") -> list[DatasetSplit]:
 
 
 if __name__ == "__main__":
+    import argparse
+
     from experiments.run_benchmark_suite import run_head_to_head
 
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--only", default="", help="comma-separated dataset names to (re-)run and merge into the CSV")
+    args = ap.parse_args()
+    out = Path("docs/experiments/holdout_head_to_head.csv")
     suite = load_holdout_suite()
+    if args.only:
+        keep = set(args.only.split(","))
+        suite = [d for d in suite if d.name in keep]
     print("Holdout suite:")
     for ds in suite:
         print(f"  {ds.name:16s} N_train={ds.X_train.shape[0]:7d} D={ds.X_train.shape[1]:4d} K={ds.n_components:2d} {ds.recommended_cov}")
-    df = run_head_to_head(suite, seeds=(0, 1, 2), out_csv="docs/experiments/holdout_head_to_head.csv")
-    df.to_csv("docs/experiments/holdout_head_to_head.csv", index=False)
+    if args.only:
+        tmp = out.with_name("holdout_rerun_tmp.csv")
+        df = run_head_to_head(suite, seeds=(0, 1, 2), out_csv=str(tmp))
+        old = pd.read_csv(out)
+        old = old[~old["dataset"].isin(set(df["dataset"]))]
+        pd.concat([old, df], ignore_index=True).to_csv(out, index=False)
+        tmp.unlink(missing_ok=True)
+    else:
+        df = run_head_to_head(suite, seeds=(0, 1, 2), out_csv=str(out))
+        df.to_csv(out, index=False)

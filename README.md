@@ -1,15 +1,15 @@
 # e-GMM
 
-**Fast and Collapse-Resistant Expectation–Maximization for Gaussian Mixture Models via Centered EMA and Eigen-Split Revival.**
+**Fast and Collapse-Resistant Expectation–Maximization for Gaussian Mixture Models via Centered EMA and Wedderburn Eigen-Split Revival.**
 
-`EGMM` is a drop-in `scikit-learn`-compatible PyTorch/CUDA and CPU Gaussian Mixture estimator inspired by Meta FAIR's [`e-means`](docs/references/e_means/README.md) (`arXiv:2611.09501`), adapted for diagonal and full $D \times D$ covariance density modeling.
+`EGMM` is a drop-in `scikit-learn`-compatible PyTorch/CUDA and CPU Gaussian Mixture estimator inspired by Meta FAIR's [`e-means`](docs/references/e_means/README.md) (`arXiv:2611.09501`), adapted to diagonal and full $D \times D$ covariance density modeling.
 
 ## Key Features
 
-- **Centered Mixed-Precision E-Step ([`src/egmm/kernels.py`](src/egmm/kernels.py)):** Computes Mahalanobis distances and responsibilities in `float32` via fused pre-projected triangular Cholesky GEMMs, accumulating centered batch/component sufficient statistics and covariance updates in `float64` to prevent offset cancellation.
-- **Degrees-of-Freedom Cosine EMA Scaling ([`src/egmm/scaling.py`](src/egmm/scaling.py)):** Automatically resolves batch size, epochs, peak EMA decay $\alpha_0$, initial moment scale $s_{\text{init}}$, and full-batch polish budget in closed form via batch degrees of freedom $B / (D \cdot K)$ with zero per-dataset cross-validation.
-- **Moment-Preserving Eigen-Split Revival ([`src/egmm/revival.py`](src/egmm/revival.py)):** Revives starving components by splitting high-variance donors along their leading covariance eigenvector (5-step batched power iteration on CUDA, exact `eigh` on CPU).
-- **CUDA Graph Step Capture & Adaptive Routing ([`src/egmm/estimator.py`](src/egmm/estimator.py)):** Branchless GPU M-step captured via `torch.cuda.CUDAGraph()`, with automatic CPU execution for small workloads (`device="auto"`).
+- **Centered mixed-precision E-step ([`src/egmm/kernels.py`](src/egmm/kernels.py)):** log-densities and centered mini-batch statistics are `float32` GEMMs, promoted to `float64` for exact uncentered moment reconstruction and EMA blending of the global moments; all reported likelihoods (`score`, `score_samples`, `predict*`, `bic`, `aic`) are evaluated exactly in `float64`.
+- **Seeding and smooth budgets ([`src/egmm/scaling.py`](src/egmm/scaling.py)):** greedy k-means++ (sync-free on CUDA) on `max(2048, 128K)` points; batch size, peak EMA rate $\alpha_0$, initial mass $s_{\text{init}}$ from batch degrees of freedom $B/(K D_{\text{eff}})$; epoch and closing-polish budgets are continuous logistic gates in $\log N$ (`schedule_law="bracket"` reproduces the legacy piecewise rules).
+- **Moment-preserving Wedderburn eigen-split revival ([`src/egmm/revival.py`](src/egmm/revival.py)):** splits high-variance donors along a power-iteration (CUDA) or exact `eigh` (CPU) direction with a split vector that keeps the donor covariance PSD for any approximate direction.
+- **Systems ([`src/egmm/estimator.py`](src/egmm/estimator.py)):** single-pass device-side standardization, branchless inner M-step captured in `torch.cuda.CUDAGraph()`, and automatic CPU execution for small workloads (`device="auto"`).
 
 ## Installation & Quick Start
 
@@ -27,19 +27,44 @@ test_nll = -model.score(X_test)
 
 ## Verification & Benchmarks
 
-- **Unit tests:** `pytest -q` (verifies kernels, eigen-split moment preservation, scikit-learn estimator API, baselines, and CUDA Graph / float32 precision stability).
-- **23-dataset primary suite + Pareto frontiers:** `python experiments/run_benchmark_suite.py` (outputs saved in [`docs/experiments/`](docs/experiments/egmm_findings.md)).
-- **16-dataset zero-tuning small-$N$ check:** `python experiments/run_small_dataset_eval.py`.
-- **Scaling sensitivity sweep & plotting:** `python experiments/fit_scaling_laws.py` and `python experiments/plot_results.py`.
+```bash
+export PYTHONPATH="src;."          # "src:." on Linux/macOS
+pytest -q
+python experiments/fit_scaling_laws.py                                  # synthetic alpha_0 sweep
+python experiments/run_benchmark_suite.py --stages h2h,abl,phase,pareto,sys # 33-dataset suite + systems run
+python experiments/run_small_dataset_eval.py                            # 16 small datasets
+python experiments/design_studies/run_design_studies.py all             # validation-only design studies
+python experiments/design_studies/split_psd_check.py                    # split safety simulation (CPU)
+python experiments/holdout_suite.py                                     # pre-registered holdout (frozen code)
+python experiments/converged_reference.py                               # converged batch-EM reference (holdout)
+python experiments/analyze_results.py                                   # ALL statistics + paper tables
+python experiments/plot_results.py
+```
+
+`experiments/analyze_results.py` is the single source of truth: it writes
+[`docs/experiments/stats_summary.txt`](docs/experiments/stats_summary.txt) and the LaTeX tables and number
+macros in `paper/generated/` that the paper `\input`s, so the paper cannot drift from the CSV logs.
+`python experiments/make_supplementary.py` builds the anonymized supplementary archive and self-tests it.
+See [`docs/experiments/egmm_findings.md`](docs/experiments/egmm_findings.md) for what changed in this version,
+negative results, and the development-set disclosure.
 
 ## Summary Results
 
-Across 23 real and synthetic datasets (3 seeds each, NVIDIA RTX 5070 + CPU):
-- **vs. shared-kernel GPU `TorchBatchGMM`:** **19/23** Test NLL wins (Wilcoxon $p = 2.15 \times 10^{-4}$), **23/23** speed wins (`2.33x` median, up to `6.72x`, $p = 2.38 \times 10^{-7}$), and `0.10` vs. `1.87` mean dead components.
-- **vs. validation-tuned `OnlineGMM_tuned`:** **19/23** Test NLL wins ($p = 7.32 \times 10^{-5}$).
-- **vs. CPU `sklearn.mixture.GaussianMixture`:** Indistinguishable Test NLL ($p = 0.964$) at **56.07x** median speedup (up to **560.91x** on `covtype_581k`).
-- **Zero-shot 16 external small datasets ($N_{\text{train}} \in [105, 3831]$):** `device="auto"` delivers **1.88x** median speedup vs. `TorchBatchGMM` ($p = 6.10 \times 10^{-5}$) and **1.68x** vs. `SklearnGMM` ($p = 6.29 \times 10^{-3}$).
+Authoritative numbers: `docs/experiments/stats_summary.txt` (NVIDIA RTX 5070 + Intel i7-14700F, 3 seeds,
+Holm-adjusted Wilcoxon p-values).
 
-## Paper (Overleaf Ready)
+| | vs GPU batch EM (`TorchBatchGMM`) | vs CPU `scikit-learn` (standardized) | vs tuned online EM |
+| :--- | :--- | :--- | :--- |
+| 33 primary datasets | 24/0/9 wins/ties/losses, 2.35x faster | 21/0/12 (n.s.), 32.5x faster | 26/1/6 |
+| 16 pre-registered unseen datasets | 9/0/7 (n.s.), 2.54x faster | 8/0/8 (n.s.), 37x faster | 13/0/3 (p = 0.012) |
 
-The self-contained LaTeX manuscript, bibliography, and single-panel figures live in [`paper/`](paper/main.tex) (`main.tex`, `references.bib`, and `figures/*.png`). Zip `paper/` and upload directly to Overleaf (`pdfLaTeX`).
+In short: on unseen data e-GMM's held-out likelihood is not significantly different from full-batch EM
+and scikit-learn (the holdout is too small to prove equivalence) at a fraction of the fit time, and it
+clearly beats online EM. It is a fast default, not a more accurate optimizer. Exact versions, hardware and
+runtimes: [`ENVIRONMENT.md`](ENVIRONMENT.md).
+
+## Paper
+
+The LaTeX manuscript lives in [`paper/`](paper/main.tex) (`main.tex`, `references.bib`, `figures/`, and
+the auto-generated `generated/`). Compile with `tectonic -X compile paper/main.tex` or upload `paper/`
+to Overleaf (`pdfLaTeX`).

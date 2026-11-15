@@ -1,7 +1,7 @@
-=== External Small-Dataset Generalization Summary (n=16) ===
-EGMM_cuda  vs TorchBatchGMM   : NLL W/T/L=8/0/8, med_dNLL=-0.0045, p_nll=0.782 | med_spd=1.47x, p_time=0.02496
-EGMM_cuda  vs OnlineGMM_tuned : NLL W/T/L=11/0/5, med_dNLL=-0.1825, p_nll=0.09344 | med_spd=0.48x, p_time=3.052e-05
-EGMM_cuda  vs SklearnGMM      : NLL W/T/L=5/0/11, med_dNLL=+0.1182, p_nll=0.3755 | med_spd=1.22x, p_time=0.3225
-EGMM_auto  vs TorchBatchGMM   : NLL W/T/L=10/0/6, med_dNLL=-0.0679, p_nll=0.09344 | med_spd=1.96x, p_time=0.0005798
-EGMM_auto  vs OnlineGMM_tuned : NLL W/T/L=11/0/5, med_dNLL=-0.2119, p_nll=0.08325 | med_spd=0.71x, p_time=0.01825
-EGMM_auto  vs SklearnGMM      : NLL W/T/L=5/0/11, med_dNLL=+0.1149, p_nll=0.4037 | med_spd=1.67x, p_time=0.001312
+=== Small-Dataset Summary (n=16; Holm-adjusted p over the 6 tests, raw in brackets) ===
+EGMM_auto  vs TorchBatchGMM   : NLL W/T/L=10/0/6, med_dNLL=-0.0612, p_nll=0.7712 [0.2522] | med_spd=2.68x, p_time=0.0001831 [3.052e-05]
+EGMM_auto  vs OnlineGMM_tuned : NLL W/T/L=10/0/6, med_dNLL=-0.0977, p_nll=0.7712 [0.1928] | med_spd=1.46x, p_time=0.2333 [0.1167]
+EGMM_auto  vs SklearnGMM      : NLL W/T/L=7/0/9, med_dNLL=+0.0290, p_nll=0.9275 [0.8209] | med_spd=2.44x, p_time=0.0001831 [3.052e-05]
+EGMM_cuda  vs TorchBatchGMM   : NLL W/T/L=9/0/7, med_dNLL=-0.0183, p_nll=0.7193 [0.1439] | med_spd=1.59x, p_time=0.003021 [0.001007]
+EGMM_cuda  vs OnlineGMM_tuned : NLL W/T/L=13/0/3, med_dNLL=-0.2064, p_nll=0.02014 [0.003357] | med_spd=0.79x, p_time=0.0003662 [9.155e-05]
+EGMM_cuda  vs SklearnGMM      : NLL W/T/L=8/0/8, med_dNLL=-0.3494, p_nll=0.9275 [0.4637] | med_spd=1.16x, p_time=0.2522 [0.2522]

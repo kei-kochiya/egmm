@@ -264,7 +264,14 @@ def run_head_to_head(
                 model = models[mname]
                 is_cpu = mname in ("SklearnGMM", "StandardizedSklearnGMM")
                 m_dev = "cpu" if is_cpu else device
-                res = evaluate_model(model, ds, device=m_dev, repeats=1 if is_cpu else GPU_TIMING_REPEATS)
+                try:
+                    res = evaluate_model(model, ds, device=m_dev, repeats=1 if is_cpu else GPU_TIMING_REPEATS)
+                    res["error"] = ""
+                except Exception as exc:  # a failed fit is recorded (and reported), never silently dropped
+                    print(f"[FIT FAILED] {ds.name} seed={seed} {mname}: {type(exc).__name__}: {exc}", flush=True)
+                    res = {k: float("nan") for k in ("fit_time", "val_nll", "test_nll", "bic", "ari", "nmi")}
+                    res.update({"dead_components": float("nan"), "revivals": 0, "n_iter": 0,
+                                "error": f"{type(exc).__name__}: {str(exc)[:160]}"})
                 res.update(
                     {
                         "dataset": ds.name,
@@ -281,6 +288,7 @@ def run_head_to_head(
 
         sub_ds = [r for r in rows if r["dataset"] == ds.name]
         df_ds = pd.DataFrame(sub_ds).groupby("method")[["test_nll", "fit_time"]].mean()
+        # (per-dataset progress line; failed fits appear as NaN)
         eg = df_ds.loc["EGMM"]
         tb = df_ds.loc["TorchBatchGMM"]
         print(

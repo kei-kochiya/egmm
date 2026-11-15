@@ -84,6 +84,23 @@ def fmt_p_txt(p: float) -> str:
     return f"{p:.4g}"
 
 
+def drop_failed_cells(df: pd.DataFrame, lines: list[str] | None = None, label: str = "") -> pd.DataFrame:
+    """Remove every (dataset, method) cell in which any seed failed to fit (NaN test NLL), and log it.
+
+    A failed cell is excluded from that method's comparisons only (it is never imputed or averaged over
+    the remaining seeds); the failure itself is reported in stats_summary.txt and the paper.
+    """
+    bad = df[df["test_nll"].isna()][["dataset", "method"]].drop_duplicates()
+    if len(bad) and lines is not None:
+        for r in bad.itertuples():
+            n_fail = int(df[(df.dataset == r.dataset) & (df.method == r.method)]["test_nll"].isna().sum())
+            lines.append(f"[{label}] FAILED FIT: {r.method} on {r.dataset} ({n_fail} seed(s)); cell excluded from comparisons")
+    if not len(bad):
+        return df
+    key = set(map(tuple, bad.to_numpy()))
+    return df[[(d, m) not in key for d, m in zip(df["dataset"], df["method"])]]
+
+
 def wtl(diff: pd.Series) -> tuple[int, int, int]:
     return int((diff < -TIE).sum()), int((diff.abs() <= TIE).sum()), int((diff > TIE).sum())
 
@@ -187,6 +204,38 @@ def data_passes(df: pd.DataFrame) -> pd.Series:
     return pd.Series(out, index=df.index)
 
 
+def _signed_rank_null_cdf(n: int) -> np.ndarray:
+    """Exact null CDF of the Wilcoxon signed-rank statistic T+ for n untied pairs."""
+    max_s = n * (n + 1) // 2
+    counts = np.zeros(max_s + 1, dtype=np.float64)
+    counts[0] = 1.0
+    for r in range(1, n + 1):
+        counts[r:] = counts[r:] + counts[: max_s + 1 - r].copy()
+    return np.cumsum(counts) / counts.sum()
+
+
+def hodges_lehmann(d: np.ndarray, alpha: float = 0.05) -> tuple[float, float, float]:
+    """Hodges-Lehmann location estimate of paired differences with its exact signed-rank CI."""
+    d = np.asarray(d, dtype=np.float64)
+    n = len(d)
+    walsh = np.sort([(d[i] + d[j]) / 2.0 for i in range(n) for j in range(i, n)])
+    est = float(np.median(walsh))
+    if n < 6:
+        return est, float("nan"), float("nan")
+    cdf = _signed_rank_null_cdf(n)
+    c = int(np.searchsorted(cdf, alpha / 2.0, side="right")) - 1  # largest t with P(T <= t) <= alpha/2
+    c = max(c, 0)
+    return est, float(walsh[c]), float(walsh[len(walsh) - 1 - c])
+
+
+def sign_test_p(d: np.ndarray) -> float:
+    d = np.asarray(d)
+    w, l_ = int((d < -TIE).sum()), int((d > TIE).sum())
+    if w + l_ == 0:
+        return float("nan")
+    return float(stats.binomtest(w, w + l_, 0.5).pvalue)
+
+
 def bold_if(val: str, cond: bool) -> str:
     return f"\\textbf{{{val}}}" if cond else val
 
@@ -274,7 +323,15 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
     for m, r in ranks.items():
         macros["Rank" + "".join(ch for ch in m if ch.isalpha())] = f"{r:.3f}"
     macros["RankEGMMplusCD"] = f"{ranks['EGMM'] + cd:.3f}"
-    macros["RankFirst"] = ranks.index[0].replace("_", r"\_")
+    pt_all = agg.pivot(index="dataset", columns="method", values="fit_time")
+    macros["GPUvsSK"] = f"{(pt_all['StandardizedSklearnGMM'] / pt_all['TorchBatchGMM']).median():.1f}"
+    beyond = [m for m, r in ranks.items() if r > ranks["EGMM"] + cd]
+    macros["NemenyiBeyond"] = ", ".join(TEX_NAME[m].replace(" (CPU)", "").replace(" (Raw CPU)", "") for m in beyond) or "none"
+    macros["NemenyiBeyondN"] = str(len(beyond))
+    capp = h2h[h2h.method.isin(["TorchBatchGMM", "StandardizedSklearnGMM"])].groupby("method")["n_iter"].apply(lambda s: 100 * (s >= 50).mean())
+    macros["PCapShareTB"] = f"{capp.get('TorchBatchGMM', float('nan')):.0f}"
+    macros["PCapShareSK"] = f"{capp.get('StandardizedSklearnGMM', float('nan')):.0f}"
+    macros["RankFirst"] = TEX_NAME[ranks.index[0]].replace(" (CPU)", "").replace(" (Raw CPU)", "")
 
     # dead components / ARI / NMI / iterations
     lines.append("\nMean dead components (pi_k < 0.05/K), revivals, ARI, NMI, iterations per method:")
@@ -374,6 +431,28 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
         tg = sysdf.groupby(["dataset", "method"])["fit_time"].mean().unstack()
         tpp = (tg["TorchBatchGMM"] / pm["TorchBatchGMM"]) / (tg["EGMM_eager"] / pm["EGMM"])
         macros["ETimePerPassRatio"] = f"{tpp.median():.2f}"
+        g_sp = float(sys_rows[0][2]["med_spd"]); a_sp = float(sys_rows[1][2]["med_spd"]); t_sp = float(sys_rows[2][2]["med_spd"])
+        macros["EGraphShare"] = f"{100 * math.log(g_sp) / math.log(t_sp):.0f}"
+        macros["EEagerSlower"] = str(int(sys_rows[1][2]["n"] - sys_rows[1][2]["n_faster"]))
+        # session-to-session timing variability: the same deterministic EGMM / TorchBatchGMM fits were
+        # timed in two independent sessions (head-to-head run and systems run)
+        hh = h2h.groupby(["dataset", "method"])["fit_time"].mean().unstack()
+        ss = sysdf.groupby(["dataset", "method"])["fit_time"].mean().unstack()
+        sp_hh = hh["TorchBatchGMM"] / hh["EGMM"]
+        sp_ss = ss["TorchBatchGMM"] / ss["EGMM"]
+        common = sp_hh.index.intersection(sp_ss.index)
+        shift = (sp_hh[common] / sp_ss[common])
+        macros["SessSpdA"], macros["SessSpdB"] = f"{sp_hh[common].median():.2f}", f"{sp_ss[common].median():.2f}"
+        macros["SessFasterA"], macros["SessFasterB"] = str(int((sp_hh[common] > 1).sum())), str(int((sp_ss[common] > 1).sum()))
+        macros["SessShiftMax"] = f"{max(shift.max(), 1 / shift.min()):.1f}"
+        egr = (hh.loc[common, "EGMM"] / ss.loc[common, "EGMM"])
+        macros["SessEGMMRatioMed"] = f"{egr.median():.2f}"
+        lines.append(
+            f"  timing sessions: median speedup vs TB {sp_hh[common].median():.2f}x (head-to-head) vs {sp_ss[common].median():.2f}x (systems); "
+            f"faster on {int((sp_hh[common] > 1).sum())} vs {int((sp_ss[common] > 1).sum())}; max per-dataset shift {max(shift.max(), 1 / shift.min()):.2f}x; "
+            f"EGMM time ratio between sessions median {egr.median():.2f} (range {egr.min():.2f}-{egr.max():.2f})"
+        )
+        macros["EAlgShare"] = f"{100 * math.log(a_sp) / math.log(t_sp):.0f}"
         lines.append(
             f"  median passes EGMM={pm['EGMM'].median():.1f} vs TorchBatch={pm['TorchBatchGMM'].median():.1f} "
             f"(median ratio {ratio.median():.1f}x); time-per-pass TB / EGMM_eager median {tpp.median():.2f}"
@@ -383,12 +462,19 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
     # ---------------- Panel F (pre-registered fresh holdout suite, one Holm family)
     ho_rows = []
     if (EXP / "holdout_head_to_head.csv").exists():
-        ho = pd.read_csv(EXP / "holdout_head_to_head.csv")
+        ho_raw = pd.read_csv(EXP / "holdout_head_to_head.csv")
+        n_fail_cells = int(ho_raw[ho_raw["test_nll"].isna()][["dataset", "method"]].drop_duplicates().shape[0])
+        fail_desc = sorted({f"{m}/{d}" for d, m in ho_raw[ho_raw["test_nll"].isna()][["dataset", "method"]].itertuples(index=False)})
+        macros["HoldoutFailCells"] = str(n_fail_cells)
+        macros["HoldoutFailList"] = (", ".join(x.replace("_", r"\_") for x in fail_desc)) or "none"
+        ho = drop_failed_cells(ho_raw, lines, "holdout")
         ho_bases = [m for m in PRIMARY if m != "EGMM"] + [m for m in EXTRA_BASELINES if m in set(ho["method"])]
         ho_rows = [("EGMM", b, pair_stats(ho, "EGMM", b)) for b in ho_bases if b in set(ho["method"])]
         apply_holm(ho_rows)
         n_ho = ho["dataset"].nunique()
         macros["nHoldout"] = str(n_ho)
+        hot = ho.groupby(["dataset", "method"])["fit_time"].mean().unstack()
+        macros["HGPUvsSK"] = f"{(hot['StandardizedSklearnGMM'] / hot['TorchBatchGMM']).median():.1f}"
         macros["HoldoutNmin"] = f"{int(ho['N_train'].min()):,}".replace(",", "{,}")
         macros["HoldoutNmax"] = f"{int(ho['N_train'].max()):,}".replace(",", "{,}")
         lines.append(f"\n=== Pre-registered fresh holdout (n={n_ho}; Holm-adjusted p, raw in brackets) ===")
@@ -423,16 +509,99 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
         t_ho = []
         for dsn in sorted(hmeta.index, key=lambda x: int(hmeta.loc[x, "N_train"])):
             N, D, K, cov = hmeta.loc[dsn]
-            cols = [c for c in ["EGMM", "TorchBatchGMM", "TorchBatchGMM_fullinit", "OnlineGMM_tuned", "StandardizedSklearnGMM", "SklearnGMM"] if (dsn, c) in hg.index]
+            all_cols = ["EGMM", "TorchBatchGMM", "TorchBatchGMM_fullinit", "OnlineGMM_tuned", "StandardizedSklearnGMM", "SklearnGMM"]
+            cols = [c for c in all_cols if (dsn, c) in hg.index]
             nl = {c: hg.loc[(dsn, c), "test_nll"] for c in cols}
             best = min(round(v, 3) for v in nl.values())
-            cells = [bold_if(f"{nl[c]:.3f}", round(nl[c], 3) == best) + (f"{{\\tiny$\\pm${hs.loc[(dsn, c)]:.2f}}}" if c in ("EGMM", "TorchBatchGMM", "StandardizedSklearnGMM") else "") for c in cols]
+            cells = []
+            for c in all_cols:  # fixed column layout: failed/missing cells print as "failed"
+                if c not in nl:
+                    cells.append("failed")
+                    continue
+                pm = f"{{\\tiny$\\pm${hs.loc[(dsn, c)]:.2f}}}" if c in ("EGMM", "TorchBatchGMM", "StandardizedSklearnGMM") else ""
+                cells.append(bold_if(f"{nl[c]:.3f}", round(nl[c], 3) == best) + pm)
             te = hg.loc[(dsn, "EGMM"), "fit_time"]
             cells.append(f"{te * 1e3:.1f}")
             cells.append(f"{hg.loc[(dsn, 'TorchBatchGMM'), 'fit_time'] / te:.2f}$\\times$")
             cells.append(f"{hg.loc[(dsn, 'StandardizedSklearnGMM'), 'fit_time'] / te:.1f}$\\times$")
             t_ho.append(f"\\texttt{{{dsn.replace('_', chr(92) + '_')}}} ({int(N)}, {int(D)}, {int(K)}, {cov}) & " + " & ".join(cells) + " \\\\")
         (GEN / "tab_holdout.tex").write_text("\n".join(t_ho) + "\n", encoding="utf-8")
+        macros["FHoldN"] = str(len(hcomp)) if len(hcomp) else "0"
+
+        # --- holdout dead components / polish / revivals (all logged quantities are reported)
+        hd = ho.groupby(["dataset", "method"])[["dead_components", "revivals", "test_nll"]].mean().unstack()
+        for m in ["EGMM", "EGMM_polish0", "TorchBatchGMM", "StandardizedSklearnGMM", "OnlineGMM_tuned"]:
+            if m in hd["dead_components"]:
+                macros["HDead" + "".join(ch for ch in m if ch.isalpha())] = f"{hd['dead_components'][m].mean():.2f}"
+        macros["HRevivalsEGMM"] = f"{hd['revivals']['EGMM'].mean():.2f}"
+        worst = hd["dead_components"]["EGMM"].sort_values(ascending=False)
+        macros["HDeadWorst"] = ", ".join(
+            f"\\texttt{{{dn.replace('_', chr(92) + '_')}}} ({worst[dn]:.1f}/{int(hmeta.loc[dn, 'K'])})" for dn in worst.index[:2])
+        if "EGMM_polish0" in hd["test_nll"]:
+            dpol = (hd["test_nll"]["EGMM"] - hd["test_nll"]["EGMM_polish0"]).dropna()
+            w_, t_, l_ = wtl(dpol)
+            macros["HPolWTL"] = f"{w_}/{t_}/{l_}"
+            macros["HPolP"] = fmt_p(wilcoxon_p(hd["test_nll"]["EGMM"].loc[dpol.index], hd["test_nll"]["EGMM_polish0"].loc[dpol.index])).strip("$")
+            worst_pol = dpol.sort_values(ascending=False)
+            macros["HPolWorst"] = ", ".join(
+                f"\\texttt{{{dn.replace('_', chr(92) + '_')}}} ($+{worst_pol[dn]:,.0f}$)".replace(",", "{,}") for dn in worst_pol.index[:2])
+            lines.append(f"Holdout EGMM vs EGMM_polish0: W/T/L={w_}/{t_}/{l_}; largest polish damage: " + ", ".join(f"{k}={v:+.1f}" for k, v in worst_pol.head(3).items()))
+        lines.append("Holdout mean dead components: " + ", ".join(f"{m}={hd['dead_components'][m].mean():.2f}" for m in hd["dead_components"].columns))
+
+        # --- robustness of the holdout comparisons (post-hoc, reported as such)
+        conv_path = EXP / "holdout_converged_em.csv"
+        ho_rb = ho
+        if conv_path.exists():
+            conv = pd.read_csv(conv_path)
+            ho_rb = pd.concat([ho, conv], ignore_index=True)
+            macros["ConvIterMed"] = f"{conv['n_iter'].median():.0f}"
+            macros["ConvCapShare"] = f"{100 * (conv['n_iter'] >= 500).mean():.0f}"
+        cap = ho[ho.method.isin(["TorchBatchGMM", "StandardizedSklearnGMM"])].groupby("method")["n_iter"].apply(lambda s: 100 * (s >= 50).mean())
+        macros["CapShareTB"] = f"{cap.get('TorchBatchGMM', float('nan')):.0f}"
+        macros["CapShareSK"] = f"{cap.get('StandardizedSklearnGMM', float('nan')):.0f}"
+        DEGENERATE = ["eeg_eye_state", "ailerons"]   # NLL decided by one outlier row / collapse onto discrete values
+        PRECACHED = ["eeg_eye_state", "isolet"]      # present in the local cache before registration
+        rb_rows = []
+        lines.append("\n=== Holdout robustness (post-hoc; HL = Hodges-Lehmann estimate of EGMM - method, 95% CI) ===")
+        hm = ho_rb.groupby(["dataset", "method"])["test_nll"].mean().unstack()
+        for b in ["TorchBatchGMM", "TorchBatchGMM_fullinit", "BatchEM_converged", "StandardizedSklearnGMM", "OnlineGMM_tuned"]:
+            if b not in hm.columns:
+                continue
+            pair = hm[["EGMM", b]].dropna()
+            d = (pair["EGMM"] - pair[b]).to_numpy()
+            dim = (pair["EGMM"] - pair[b]) / hmeta.loc[pair.index, "D"].astype(float)
+            nd = [x for x in pair.index if x not in DEGENERATE]
+            hl, lo, hi = hodges_lehmann((pair.loc[nd, "EGMM"] - pair.loc[nd, b]).to_numpy())
+            hld, lod, hid = hodges_lehmann(dim.loc[nd].to_numpy())
+            res = {"b": b, "n": len(pair), "wtl": "/".join(map(str, wtl(pd.Series(d)))), "hl": hl, "lo": lo, "hi": hi,
+                   "hld": hld, "lod": lod, "hid": hid,
+                   "p_dim": wilcoxon_p(dim, pd.Series(0.0, index=dim.index)), "p_sign": sign_test_p(d)}
+            for tag, excl in [("deg", DEGENERATE), ("pre", PRECACHED)]:
+                keep = [x for x in pair.index if x not in excl]
+                dd = pair.loc[keep, "EGMM"] - pair.loc[keep, b]
+                res[tag + "_wtl"] = "/".join(map(str, wtl(dd)))
+                res[tag + "_p"] = wilcoxon_p(pair.loc[keep, "EGMM"], pair.loc[keep, b])
+            rb_rows.append(res)
+            lines.append(
+                f"  EGMM vs {b:24s} n={res['n']} W/T/L={res['wtl']} HL(non-degenerate)={hl:+.3f} [{lo:+.3f}, {hi:+.3f}] nats; per-dim HL={hld:+.4f} "
+                f"[{lod:+.4f}, {hid:+.4f}]; p_dim={fmt_p_txt(res['p_dim'])} p_sign={fmt_p_txt(res['p_sign'])}; "
+                f"excl. degenerate {res['deg_wtl']} p={fmt_p_txt(res['deg_p'])}; excl. pre-cached {res['pre_wtl']} p={fmt_p_txt(res['pre_p'])}"
+            )
+            t = "R" + "".join(ch for ch in b if ch.isalpha())
+            macros[t + "HL"] = f"{hl:+.2f}"
+            macros[t + "CI"] = f"[{lo:+.2f}, {hi:+.2f}]"
+            macros[t + "WTL"] = res["wtl"]
+            macros[t + "DegWTL"] = res["deg_wtl"]
+            macros[t + "DegP"] = fmt_p(res["deg_p"]).strip("$")
+        name = {"TorchBatchGMM": r"\texttt{TorchBatchGMM}", "TorchBatchGMM_fullinit": r"\texttt{TorchBatch\_fullinit}",
+                "BatchEM_converged": r"Batch EM, full init, converged$^\dagger$", "StandardizedSklearnGMM": r"\texttt{StdSklearnGMM}",
+                "OnlineGMM_tuned": r"\texttt{OnlineGMM\_tuned}"}
+        t_rb = [
+            f"{name[r['b']]} & {r['wtl']} & ${r['hl']:+.2f}$ $[{r['lo']:+.2f}, {r['hi']:+.2f}]$ & ${r['hld']:+.4f}$ & {fmt_p(r['p_dim'])} & "
+            f"{fmt_p(r['p_sign'])} & {r['deg_wtl']}, {fmt_p(r['deg_p'])} & {r['pre_wtl']}, {fmt_p(r['pre_p'])} \\\\"
+            for r in rb_rows
+        ]
+        (GEN / "tab_holdout_robust.tex").write_text("\n".join(t_rb) + "\n", encoding="utf-8")
 
     # ---------------- Table 1 LaTeX body
     def t1_row(a, b, s, short=None):
@@ -451,7 +620,7 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
     t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{B. Large-scale subset ($N_{{\\mathrm{{train}}}} > 10^5$, $n = {len(large)}$)}}}} \\\\")
     t1 += [t1_row(a, b, s) for a, b, s in panel_b]
     t1.append("\\midrule")
-    t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{C. The {len(held)} primary datasets never used during development}}}} \\\\")
+    t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{C. The {len(held)} primary datasets added after the original rules were set}}}} \\\\")
     t1 += [t1_row(a, b, s) for a, b, s in panel_h]
     t1.append("\\midrule")
     t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{D. Component \\& fairness ablations across all {n_ds} datasets}}}} \\\\")
@@ -459,11 +628,11 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
     t1 += [t1_row(a, b, s, short.get(b) if a == "EGMM_polish0" else None) for a, b, s in abl_rows]
     if ho_rows:
         t1.append("\\midrule")
-        t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{F. Pre-registered fresh holdout ({macros['nHoldout']} new OpenML datasets, code frozen before download)}}}} \\\\")
+        t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{E. Pre-registered fresh holdout ({macros['nHoldout']} new OpenML datasets, code frozen before download)}}}} \\\\")
         t1 += [t1_row(a, b, st) for a, b, st in ho_rows]
     if sys_rows:
         t1.append("\\midrule")
-        t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{E. Algorithm vs.\\ engineering (separate systems run, {macros['nSys']} datasets)}}}} \\\\")
+        t1.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{F. Algorithm vs.\\ engineering (separate systems run, {macros['nSys']} datasets)}}}} \\\\")
         t1 += [t1_row(a, b, st) for a, b, st in sys_rows]
     (GEN / "tab_wilcoxon_main.tex").write_text("\n".join(t1) + "\n", encoding="utf-8")
 
@@ -741,6 +910,8 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
         macros["CloseBest"] = f"{-best_gain:.2f}"
         if "sub64k_r2" in g.columns and "creditcard" in g.index:
             macros["CloseCredit"] = f"{(g['sub64k_r2'] - g['base'])['creditcard']:+.1f}"
+        if "ep3" in g.columns and "creditcard" in g.index:
+            macros["EpThreeCredit"] = f"{(g['ep3'] - g['base'])['creditcard']:+.1f}"
         for v, tag in [("seed256x_l10", "SeedBig"), ("ep3", "EpThree")]:
             if v in g.columns:
                 d = (g[v] - g["base"]).loc[g.index.intersection(syn)]
@@ -753,9 +924,24 @@ def main(out_exp: Path | None = None, out_gen: Path | None = None, in_exp: Path 
         else:
             g = pr.groupby("dataset").mean(numeric_only=True)
             d = (g["test_float32"] - g["test_float64"]).abs()
-        lines.append(f"  float32 vs float64 training (shared RNG): max |d test NLL| = {d.max():.3f} ({d.idxmax()})")
+        lines.append(f"  float32 vs float64 training (shared RNG): max |d mean test NLL| = {d.max():.3f} ({d.idxmax()})")
         macros["PrecMax"], macros["PrecMaxName"] = f"{d.max():.2f}", d.idxmax().replace("_", r"\_")
+        if "variant" in pr.columns:
+            wide = pr.pivot_table(index=["dataset", "seed"], columns="variant", values="test_nll")
+            per_run = (wide["float32"] - wide["float64"]).abs()
+            macros["PrecRunMax"] = f"{per_run.max():.2f}"
+            macros["PrecRunMaxName"] = per_run.idxmax()[0].replace("_", r"\_")
+            lines.append(f"  per-run max |d test NLL| = {per_run.max():.3f} ({per_run.idxmax()})")
         macros["PrecN"] = str(len(d))
+
+    if (dsd / "split_psd_check.csv").exists():
+        sp = pd.read_csv(dsd / "split_psd_check.csv")
+        macros["SplitTrials"] = f"{len(sp):,}".replace(",", "{,}")
+        macros["SplitViolClassical"] = str(int((sp["lmin_classical"] < 0).sum()))
+        macros["SplitViolWedderburn"] = str(int((sp["lmin_wedderburn"] < 0).sum()))
+        macros["SplitAdvViol"] = str(int((sp["lmin_classical_adversarial"] < 0).sum()))
+        lines.append(f"  split PSD check: {len(sp)} trials; classical violations (5-step power iteration) = {int((sp['lmin_classical'] < 0).sum())}; "
+                     f"Wedderburn = {int((sp['lmin_wedderburn'] < 0).sum())}; classical with 1-step power iteration = {int((sp['lmin_classical_adversarial'] < 0).sum())}")
 
     # ---------------- write outputs
     (out_exp / "stats_summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")

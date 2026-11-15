@@ -1,81 +1,71 @@
-# e-GMM (`EGMM`) Experimental Findings, Fairness Ablations & Verification Report
+# e-GMM (`EGMM`) Experimental Findings
 
-**Summary:** `EGMM` is a drop-in, scikit-learn compatible (`DensityMixin`, `BaseEstimator`) GPU/CPU replacement for `GaussianMixture` combining mini-batch Exponential Moving Average (EMA) sufficient statistics with cosine step-size annealing, moment-preserving Wedderburn rank-1 eigen-split revival for dead components, centered mixed-precision sufficient-statistics accumulation with memory-bounded batch chunking, branchless inner M-steps, and CUDA Graph capture. Across an expanded leakage-free **33-dataset, 3-seed** tabular & synthetic suite ($N_{\text{train}}$ up to $406{,}708$, $D$ up to $561$, $K$ up to $64$, spanning 25 full and 8 diagonal covariance tasks), `EGMM` ranks **#1 overall** in held-out test negative log-likelihood (NLL mean rank **`2.485`** across 7 methods, Friedman $\chi^2 = 80.922, p = 2.304 \times 10^{-15}$), beats a shared-kernel PyTorch full-batch EM baseline (`TorchBatchGMM`) on **26/33 datasets in held-out test NLL** (median $\Delta\text{NLL} = -0.4288$, Wilcoxon $p = 6.357 \times 10^{-6}$) and **30/33 datasets in wall-clock speed** (median **`2.68x`**, up to **`8.26x`**, Wilcoxon $p = 3.450 \times 10^{-7}$), beats validation-tuned Cappé–Moulines Online EM (`OnlineGMM_tuned`) on **28/33 datasets** (median $\Delta\text{NLL} = -0.9848$, $p = 2.111 \times 10^{-7}$), and achieves a **`48.21x` median speedup** over scale-matched CPU `StandardizedSklearnGMM` (**`57.86x`** over raw `SklearnGMM`) at statistically indistinguishable NLL ($p = 0.3127$).
+All numbers in this repository's paper and in this note are regenerated from the CSV logs in this
+folder by [`experiments/analyze_results.py`](../../experiments/analyze_results.py), which writes
+[`stats_summary.txt`](stats_summary.txt), [`small_dataset_stats.txt`](small_dataset_stats.txt) and the
+LaTeX tables/macros in [`paper/generated/`](../../paper/generated/). Treat `stats_summary.txt` as the
+authoritative source; this note only explains what was run and why.
 
-Crucially, controlled fairness ablations prove that even with **zero full-batch polish (`polish_steps=0`)**, pure stochastic `EGMM_polish0` significantly outperforms `TorchBatchGMM` (**21/33 NLL**, median $\Delta\text{NLL} = -0.2591$, $p = 0.0491$, **`2.30x` speedup**) and `OnlineGMM_tuned` (**25/33 NLL**, $p = 3.729 \times 10^{-4}$), and on the **7 large-scale datasets ($N_{\text{train}} > 100\text{k}$, where `polish_steps == 0` by default)** achieves **6/7 NLL wins** (median $\Delta\text{NLL} = -1.0330$) with a **`3.93x` median speedup** over `TorchBatchGMM` and **`161.55x` median speedup** over `StandardizedSklearnGMM`.
+## What changed in this version (and why)
 
----
+| Change | Code | Evidence |
+| :--- | :--- | :--- |
+| Greedy k-means++ seeding on `min(N, max(2048, 128K))` points + 10 Lloyd steps (shared by every PyTorch baseline) | `kernels.init_kmeans_pp(n_local_trials=None)`, `EGMM._initialize_moments` | `design_studies/seeding_variants.csv` (validation NLL only) |
+| Smooth logistic-in-log N epoch / polish budgets replace the `N < 15k / 100k` (full) and `30k / 100k` (diag) brackets | `scaling.auto_hyperparameters(schedule_law="smooth")` | `design_studies/schedule_law_ab.csv`, ablation `EGMM_bracket_law` |
+| Single-pass device-side standardization (every host row crosses PCIe once; bit-identical when it fits a 40%-of-free-memory budget) | `EGMM._fit_standardizer_and_transform` | `tests/test_round3_improvements.py`, phase table (`syn_scale400k_d256_diag`) |
+| Exact float64 scoring (`score`, `score_samples`, `predict*`, `bic`, `aic`) for EGMM and all PyTorch baselines | `EGMM._set_exact_scoring_params`, `_iter_weighted_log_prob` | review finding: float32 expanded diagonal quadratic form cancels when variances hit `reg_covar` |
+| Fair timing: `gc.collect()` + ~60 ms GPU clock warm-up before every timed GPU fit | `run_benchmark_suite.gpu_clock_warmup` | seed-1 outliers after long CPU sklearn fits in an earlier run |
+| sklearn baselines: `max_iter=50` on every dataset and seed (an earlier run capped `N > 150k` full at 20 iterations, seed 0 only); `StandardizedSklearnGMM` now uses sklearn's default `init_params="kmeans"` and the same 1e-12 std floor as EGMM | `run_benchmark_suite.py`, `baselines.StandardizedSklearnGMM` | review finding |
+| `OnlineGMM_matched_polish` receives exactly EGMM's resolved polish budget and `s_init` | `run_benchmark_suite.run_ablation_suite` | review finding (an earlier run gave it 3 vs 5 / 6 vs 12 steps on 10 datasets) |
+| New sensitivity baseline `TorchBatchGMM_fullinit` (seeding on all N points) and `EGMM_polish0` inside the head-to-head run | `baselines.TorchBatchGMMFullInit` | review finding |
 
-## 1. Theoretical & Algorithmic Alignment with `e-means` (`arXiv:2611.09501`)
+## Final outcome (see `stats_summary.txt`)
 
-Direct inspection of Bessa et al. (2026), *"`e-means`: outperforming `k-means` (in one-tenth the epochs)"* (`arXiv:2611.09501`) and `faiss/contrib/e_means` reveals four foundational connections and second-order generalizations in `e-GMM`:
+* Primary suite (33 datasets, 23 of which informed development): e-GMM beats `TorchBatchGMM` 24/0/9
+  (Holm p = 7.6e-4) at 2.35x median speed, is indistinguishable from standardized scikit-learn (21/0/12,
+  p = 0.29) at 32.5x, and beats tuned online EM 26/1/6.
+* Pre-registered holdout (16 unseen OpenML datasets, library code frozen before download; content
+  fingerprint `ea2a6d95...391f` from `experiments/code_fingerprint.py`): the quality advantage over batch
+  EM does **not** carry over (9/0/7 vs `TorchBatchGMM`, 8/0/8 vs scikit-learn, both p = 1.0 after Holm;
+  Hodges-Lehmann 95% CIs about -1 to +2 nats, so parity is not established either), the speed advantage
+  does (2.54x, 37x; ~15x of the latter is GPU vs CPU), and e-GMM still beats tuned online EM (13/0/3,
+  p = 0.012). The closing polish does not help on the holdout and collapses components on discrete-valued
+  data (ailerons); eeg_eye_state's NLL is decided by one outlier test row. Raw scikit-learn failed to initialize on `dionis` (all 3 seeds); the
+  failure is recorded in the CSV (`error` column) and excluded only from that method's comparison.
+* Systems decomposition: CUDA graph alone 1.56x; algorithm alone 1.28x (3.8x fewer data passes, costlier
+  passes); combined 2.20x over `TorchBatchGMM`.
 
-1. **From Convex-Hull Invariance (`e-means` Appendix E) to Schur-Complement PSD-Cone Invariance (`e-GMM` Theorem 1)**:
-   - Bessa et al. (Appendix E, Figs. 16–17) prove that mini-batch SGD and Adam collapse at large batch sizes / learning rates because unconstrained gradient steps leave the convex hull of assigned points, whereas EMA is a convex combination of sufficient statistics and stays strictly inside the convex hull for all $\alpha_t \in (0, 1]$.
-   - In `e-GMM`, parameters live in the positive-definite covariance cone rather than $\mathbb{R}^D$. Applying EMA in raw sufficient statistics $\Theta_k = (M_k, \mathbf{S}_k, \mathbf{Q}_k)$ where each batch satisfies $M_k \mathbf{Q}_k - \mathbf{S}_k \mathbf{S}_k^\top \succeq 0$ preserves Schur-complement PSD-cone invariance for all $\alpha_t \in (0, 1]$, provided floating-point cancellation in $\mathbf{Q}_k / M_k - \boldsymbol{\mu}_k \boldsymbol{\mu}_k^\top$ is eliminated via centered `float32 -> float64` accumulation (`src/egmm/kernels.py`).
-2. **Factorization of `e-means` Step Law vs `e-GMM` Batch Degrees of Freedom (`src/egmm/scaling.py`)**:
-   - `e-means` Eq. (6) ($\alpha_0 = 0.8244 \cdot K^{-0.4617} B^{0.9003} N^{-0.4498} T^{-0.1057}$) factors into $(B/N)^{0.45} (B/K)^{0.46} T^{-0.11}$: inverse steps per epoch ($B/N$) times points per cluster per batch ($B/K$).
-   - While $k$-means centroids require only $O(1)$ points per cluster regardless of $D$ (allowing fixed `_INIT_USAGE = 2**-16`), estimating a $D$-dimensional covariance matrix requires replacing $B/K$ with the **effective batch degrees of freedom** $\gamma_{\text{df}} = B / (K D_{\text{eff}})$ ($D_{\text{eff}} = D$ for `full`, $D_{\text{eff}} = \sqrt{D}$ for `diag`), governing both $\alpha_0$ and initial Voronoi moment mass `init_usage_scale` $\in [0.25, 1.0]$.
-3. **Why Multiplicative BF16 Jitter Fails for GMMs & Wedderburn Rank-1 Eigen-Splitting (`src/egmm/revival.py`)**:
-   - `e-means` (Appendix H.1, Eq. 8) splits dead centroids via $\mathbf{c}_j \odot (1 \pm \varepsilon_{\text{BF16}})$, which fails near the origin ($\boldsymbol{\mu}_d \approx \mathbf{0}$) and leaves donor covariance $\boldsymbol{\Sigma}_d$ unsplit.
-   - `e-GMM` replaces this with the **Wedderburn rank-1 reduction vector** $\boldsymbol{\delta} = \Delta \frac{\boldsymbol{\Sigma}_d \mathbf{v}}{\sqrt{\mathbf{v}^\top \boldsymbol{\Sigma}_d \mathbf{v}}}$, $\boldsymbol{\Sigma}'_d = \boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top + \epsilon_{\text{reg}}\mathbf{I}_D$, which conserves exact first and second raw mixture moments while guaranteeing Loewner PSD ordering $\boldsymbol{\Sigma}_d - \boldsymbol{\delta}\boldsymbol{\delta}^\top \succeq (1-\Delta^2)\boldsymbol{\Sigma}_d \succeq 0$ for *any* approximate GPU power-iteration vector $\mathbf{v}$.
+## Negative results worth knowing
 
----
+* **Closing refinement does not close the large-N gap to 50-iteration scikit-learn.** One or two exact
+  full-batch polish steps, or 2-3 EM steps on a 64k/128k subsample, after the zero-polish EMA phase change
+  the four large synthetic mixtures by at most ~0.07 nats, and subsampled refinement hurts `creditcard`
+  by ~5.5 nats (`design_studies/closing_refinement_large_n.csv`). Exact full-batch steps remove stochastic
+  tail noise, so an e-means-style closing average cannot do better: the gap is the optimization basin,
+  which better seeding addresses.
+* **float32 vs float64 training** with identical random streams changes test NLL by at most ~0.2 nats on
+  the eight diagonal datasets (`design_studies/precision_f32_vs_f64.csv`); the large float32 errors found by
+  the earlier float32 errors affected *scoring*, which is now exact.
+* **The synthetic calibration sweep does not determine the deployed constants** (`scaling_law_fit_summary.csv`:
+  log-linear R^2 = 0.11 diag / 0.18 full; median-optimal alpha_0 = 0.85 diag, 0.45 full vs ~0.8 deployed
+  for full at high gamma_df). The rules are hand-designed heuristics.
 
-## 2. Statistical Significance Across 33 Primary Datasets & Fairness Ablations
+## Development-set disclosure
 
-From [`stats_summary.txt`](stats_summary.txt), [`benchmark_head_to_head.csv`](benchmark_head_to_head.csv), and [`benchmark_ablations.csv`](benchmark_ablations.csv):
+The batch/epoch/polish rules were iterated during development on 23 of the 33 primary datasets. The other
+10 (`jannis`, `numerai28.6`, `higgs_98k`, `philippine`, `gas_drift`, `har`, `skin_nonskin`, `creditcard`,
+`syn_scale300k_k64_full`, `syn_scale400k_d256_diag`) are reported as a separate panel in `stats_summary.txt`
+and Table 1C of the paper. The small-N rules were introduced alongside the 16-dataset small evaluation.
+The seeding and budget choices of this version were selected on the validation splits of all 33 primary datasets (with the evaluation seeds), so the whole primary suite is development data; only the pre-registered holdout is confirmatory.
 
-### A. All 33 Primary Datasets (3 Seeds Each)
+## Reproduce
 
-| Comparison ($n=33$) | Test NLL W / T / L | Median $\Delta\text{NLL}$ | Wilcoxon $p_{\text{NLL}}$ | Median Speedup | Wilcoxon $p_{\text{time}}$ |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **EGMM vs `TorchBatchGMM` (GPU Batch EM)** | **26 / 0 / 7** | **$-0.4288$** | **$6.357 \times 10^{-6}$** | **`2.68x`** *(30/33 faster)* | **$3.450 \times 10^{-7}$** |
-| **EGMM vs `OnlineGMM_tuned`** | **28 / 0 / 5** | **$-0.9848$** | **$2.111 \times 10^{-7}$** | `0.66x` | $0.01931$ |
-| **EGMM vs `NaiveMinibatchGMM`** | **32 / 0 / 1** | **$-1.5624$** | **$7.683 \times 10^{-9}$** | `0.60x` | $4.369 \times 10^{-4}$ |
-| **EGMM vs `EMeansInitGMM`** | **32 / 0 / 1** | **$-1.4988$** | **$1.630 \times 10^{-8}$** | **`1.15x`** | **$2.581 \times 10^{-3}$** |
-| **EGMM vs `StandardizedSklearnGMM` (CPU)** | **17 / 0 / 16** | **$-0.0366$** | $0.3127$ *(parity)* | **`48.21x`** *(up to `489.9x`)* | **$2.328 \times 10^{-10}$** |
-| **EGMM vs `SklearnGMM` (Raw CPU)** | 14 / 0 / 19 | $+0.0378$ | $0.8599$ *(parity)* | **`57.86x`** *(up to `489.9x`)* | **$2.328 \times 10^{-10}$** |
-
-- **Friedman Omnibus Test ($n=33, k=7$):** $\chi^2 = 80.922$, $p = 2.304 \times 10^{-15}$, Nemenyi Critical Difference $\text{CD}(0.05) = 1.568$.
-- **Mean Test NLL Ranks (1 = best):**
-  1. **`EGMM` : `2.485`**
-  2. `StandardizedSklearnGMM` : `2.576`
-  3. `SklearnGMM` : `3.030`
-  4. `TorchBatchGMM` : `4.030`
-  5. `OnlineGMM_tuned` : `4.485`
-  6. `EMeansInitGMM` : `5.394`
-  7. `NaiveMinibatchGMM` : `6.000`
-
-### B. Large-Scale Zero-Polish Subset ($N_{\text{train}} > 100\text{k}, n=7$, `polish_steps == 0`)
-
-Datasets: `covtype_581k` ($406.7\text{k}$), `creditcard` ($199.4\text{k}$), `skin_nonskin` ($171.5\text{k}$), `syn_scale200k` ($140\text{k}$), `syn_scale300k_k64_full` ($210\text{k}$), `syn_scale400k_d256_diag` ($280\text{k}$), `syn_scale500k_diag` ($350\text{k}$).
-
-| Comparison ($n=7$, `polish_steps=0`) | Test NLL W / T / L | Median $\Delta\text{NLL}$ | Wilcoxon $p_{\text{NLL}}$ | Median Speedup |
-| :--- | :---: | :---: | :---: | :---: |
-| **EGMM vs `TorchBatchGMM`** | **6 / 0 / 1** | **$-1.0330$** | **$0.03125$** | **`3.93x`** |
-| **EGMM vs `OnlineGMM_tuned`** | **6 / 0 / 1** | **$-1.5134$** | **$0.03125$** | **`1.06x`** |
-| **EGMM vs `NaiveMinibatchGMM`** | **7 / 0 / 0** | **$-1.5624$** | **$0.01563$** | `0.96x` |
-| **EGMM vs `EMeansInitGMM`** | **6 / 0 / 1** | **$-1.1368$** | **$0.03125$** | **`3.02x`** |
-| **EGMM vs `StandardizedSklearnGMM`** | 2 / 0 / 5 | $+0.7294$ | $0.5781$ | **`161.55x`** |
-
-### C. Component & Fairness Ablations ($n=33$)
-
-| Comparison ($n=33$) | Test NLL W / T / L | Median $\Delta\text{NLL}$ | Wilcoxon $p_{\text{NLL}}$ | Median Speedup | Dead Components (Mean) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **EGMM vs `EGMM_no_revival`** | **26 / 4 / 3** | **$-0.5132$** | **$7.579 \times 10^{-6}$** | `0.89x` | **`0.05` vs `4.49`** |
-| **EGMM vs `OnlineGMM_matched_polish`** | **26 / 0 / 7** | **$-0.5962$** | **$2.302 \times 10^{-6}$** | **`1.22x`** | **`0.05` vs `4.29`** |
-| **EGMM vs `EGMM_polish0`** | **21 / 7 / 5** | **$-0.0493$** | **$4.398 \times 10^{-4}$** | `0.68x` | `0.05` vs `0.04` |
-| **EGMM vs `EGMM_no_init_scale`** | **17 / 3 / 13** | $-0.0044$ | $0.3672$ | `1.00x` | `0.05` vs `0.04` |
-| **`EGMM_polish0` vs `TorchBatchGMM`** | **21 / 0 / 12** | **$-0.2591$** | **$0.04914$** | **`2.30x`** | **`0.04` vs `3.01`** |
-| **`EGMM_polish0` vs `OnlineGMM_tuned`** | **25 / 0 / 8** | **$-0.5313$** | **$3.729 \times 10^{-4}$** | **`1.03x`** | **`0.04` vs `4.16`** |
-
----
-
-## 3. Runtime Phase Breakdown & ARI vs NLL Split Trade-Off
-
-- **Cold vs Warm Runtime Phase Breakdown ([`benchmark_phase_breakdown.csv`](benchmark_phase_breakdown.csv)):**
-  - Across 8 profiled datasets, CUDA Graph warmup/capture takes `7.3–19.2 ms` in warm steady-state and replays 36–45 mini-batch EMA steps in `6.5–48.6 ms` (`204.7 ms` on 406.7k-row `covtype_581k`).
-  - For $N_{\text{train}} > 100\text{k}$, `polish_ms = 0.0`, confirming that large-scale speedups (`3.72x–8.26x` over `TorchBatchGMM`, `89.6x–489.9x` over `StandardizedSklearnGMM`) come from pure CUDA-Graph EMA + Wedderburn revival.
-- **ARI vs NLL Split Trade-Off (32 Labeled Datasets):**
-  - `EGMM` achieves mean ARI `0.3251` and NMI `0.4873` (`0.05` dead components), whereas disabling revival (`EGMM_no_revival`) raises mean ARI to `0.3631` and NMI to `0.4945` (exceeding `TorchBatchGMM`'s `0.3467` and `OnlineGMM_tuned`'s `0.3602`) while degrading held-out test NLL by $+0.5132$ ($p = 7.58 \times 10^{-6}$, leaving `4.49` dead components). Leaving excess components dead avoids subdividing skewed classes into multiple Gaussian sub-lobes (preserving pairwise class Rand index ARI) at the cost of inferior continuous density estimation (NLL).
+```bash
+export PYTHONPATH="src;."          # use "src:." on Linux/macOS
+python experiments/fit_scaling_laws.py
+python experiments/run_benchmark_suite.py --stages h2h,abl,phase,pareto,sys
+python experiments/run_small_dataset_eval.py
+python experiments/design_studies/run_design_studies.py all
+python experiments/analyze_results.py
+python experiments/plot_results.py
+```
