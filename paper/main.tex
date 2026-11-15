@@ -40,6 +40,8 @@
 \newcommand{\gentable}[1]{\@@input generated/#1.tex }
 % Code location: anonymized supplementary material under review; public repository once de-anonymized.
 \newcommand{\codelink}{\if@accepted\url{https://github.com/kei-kochiya/egmm}\else the anonymized supplementary material\fi}
+% How readers re-check the paper's numbers: the anonymized archive under review, the repository otherwise.
+\newcommand{\verifysentence}{\if@accepted Running \texttt{experiments/verify\_tables.py} re-runs the analysis on the released logs and checks that the output matches this paper.\else The supplementary archive re-runs the analysis on its own logs and checks that the output matches this paper.\fi}
 \makeatother
 
 \title{e-GMM: Fast Online Expectation--Maximization for Gaussian Mixture Models on GPUs}
@@ -324,7 +326,7 @@ Appendix~\ref{app:extra} reports Panels E--F (Table~\ref{tab:wilcoxon_extra}: $N
 \egmm{} is mini-batch online EM for Gaussian mixtures with a finite-horizon cosine schedule, split-based revival, centered mixed-precision statistics, and CUDA-graph execution. Its development-suite advantage over GPU batch EM did not replicate on a pre-registered holdout of \rnHoldout{} unseen datasets, where it was not significantly different from batch EM and \texttt{scikit-learn}, with occasional larger losses, at median per-dataset speedups of $\rFTorchBatchGMMSpdR\times$ and $\rFStandardizedSklearnGMMSpdR\times$, and remained better than tuned online EM (without its closing batch steps not significantly). Most of its speedup over batch EM comes from CUDA graphs on small and medium datasets and from fewer data passes on larger ones. Within the scales tested ($N \le 4.1\times 10^5$, one consumer GPU), we see \egmm{} as a fast default for full-covariance GMMs with continuous features, not as a more accurate optimizer; for high-dimensional diagonal data batch EM is safer, and for discrete features \texttt{polish\_steps=0} was safer on our holdout (post hoc). Whether an online-EM variant can reliably reach better optima than batch EM on unseen data, as stepwise EM sometimes does~\citep{liang2009online}, remains open.
 
 \subsubsection*{Reproducibility Statement}
-Code, raw CSV logs, the single analysis script that regenerates every table and statistic in this paper, the design-study, holdout, and converged-reference scripts, the pre-registration record, the library fingerprint script, and the exact software versions are available in \codelink{}. The supplementary archive re-runs the analysis on its own logs and checks that the output matches this paper.
+Code, raw CSV logs, the single analysis script that regenerates every table and statistic in this paper, the design-study, holdout, and converged-reference scripts, the pre-registration record, the library fingerprint script, and the exact software versions are available in \codelink{}. \verifysentence{}
 
 \subsubsection*{Broader Impact Statement}
 This work studies general-purpose density estimation and clustering with Gaussian mixtures. Faster fitting lowers the computational and energy cost of tabular density estimation and exploratory analysis. It introduces no societal or privacy risks beyond those of standard unsupervised mixture modeling.
