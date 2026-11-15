@@ -44,7 +44,6 @@ Repo `github.com/kei-kochiya/egmm`, branch `main`. This file is excluded from th
 | `docs/experiments/` | CSV logs (source of truth), `stats_summary.txt`, `egmm_findings.md`, pre-registration |
 | `paper/` | `main.tex`, `references.bib`, TMLR style, `generated/`, `figures/`, `make_arxiv.py` |
 | `dist/`, `data/` (git-ignored) | submission ZIP + arXiv bundle; OpenML cache (337 MB, needed for reruns) |
-| `docs/superpowers/` | original 2026-11-14 design spec/plan; superseded (its "lower NLL than batch EM" goal did not hold) |
 | `docs/references/e_means/` | mirrored third-party e-means code, reference only |
 
 ## Commands (Windows; use `src:.` on Linux)
