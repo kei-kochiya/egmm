@@ -202,7 +202,8 @@ def add_next_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> No
         eg = large[(large["dataset"] == ds) & (large["method"] == "EGMM_r0")]
         macros[f"XSk{cov}Time"] = f"{ts:.0f}"
         macros[f"XSk{cov}Ratio"] = f"{ts / eg[eg['seed'] == 0]['fit_time'].mean():.0f}"  # same seed as the single sklearn fit
-        macros[f"XSk{cov}dNLL"] = f"{eg[eg['seed'] == 0]['test_nll'].mean() - sk[sk['dataset'] == ds]['test_nll'].mean():+.2f}"  # seed-matched (seed 0)
+        macros[f"XSk{cov}dNLL"] = f"{eg[eg['seed'] == 0]['test_nll'].mean() - sk[sk['dataset'] == ds]['test_nll'].mean():+.2f}"  # seed 0 (both)
+        macros[f"XSk{cov}dNLLMean"] = f"{eg['test_nll'].mean() - sk[sk['dataset'] == ds]['test_nll'].mean():+.2f}"  # e-GMM 3-seed mean
 
     # ---------------- diagonal-covariance diagnostics (appendix table)
     if diag is not None:
@@ -226,6 +227,25 @@ def add_next_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> No
         for ds in ("volkert", "isolet"):
             if ds in gd.index:
                 macros[f"XDiagAvsTB{ds}"] = f"{gd.loc[ds, 'EGMM_a085'] - gd.loc[ds, 'TorchBatchGMM']:+.1f}"
+        # the rule's actual settings on these datasets (the diagnostics change more than one constant)
+        from egmm.scaling import auto_hyperparameters
+
+        meta_d = diag.groupby("dataset")[["N_train", "D", "K"]].first()
+        hps = {ds: auto_hyperparameters(int(r.N_train), int(r.K), int(r.D), "diag") for ds, r in meta_d.iterrows()}
+        hi_d = [ds for ds in hps if meta_d.loc[ds, "D"] >= 100]
+        a0 = pd.Series({ds: hps[ds].alpha_0 for ds in hi_d})
+        am = pd.Series({ds: hps[ds].alpha_min for ds in hi_d})
+        macros["XDiagAlphaLo"], macros["XDiagAlphaHi"] = f"{a0.min():.2f}", f"{a0.max():.2f}"
+        macros["XDiagAminLo"], macros["XDiagAminHi"] = f"{am.min():.3f}", f"{am.max():.3f}"
+        r = meta_d.iloc[0]
+        macros["XDiagAminAlt"] = f"{auto_hyperparameters(int(r.N_train), int(r.K), int(r.D), 'diag', alpha=0.85).alpha_min:.3f}"
+        ratio = pd.Series({ds: auto_hyperparameters(int(meta_d.loc[ds, 'N_train']), int(meta_d.loc[ds, 'K']), int(meta_d.loc[ds, 'D']), "diag",
+                                                    max_epochs=2 * hps[ds].max_epochs).total_steps / hps[ds].total_steps for ds in hps})
+        macros["XDiagStepRatioLo"], macros["XDiagStepRatioHi"] = f"{ratio.min():.1f}", f"{ratio.max():.1f}"
+        sd_all = diag[diag["method"] == "EGMM_r0"].groupby("dataset")["test_nll"].std(ddof=1)
+        macros["XDiagIsoletSD"] = f"{sd_all.get('isolet', float('nan')):.1f}"
+        lines.append(f"diag rule settings: alpha0 {a0.round(3).to_dict()}, alpha_min {am.round(3).to_dict()}; "
+                     f"twice the epochs = {ratio.round(2).to_dict()} x the EMA steps")
         macros["XDiagNotolMax"] = f"{(gd['EGMM_notol'] - gd['EGMM_r0']).abs().max():.3f}"
         lines.append(f"diag: alpha0=0.85 vs deployed: improves >1 nat on {len(big)}/{len(da)} ({', '.join(big.index)}); worst {da.idxmax()} "
                      f"{da.max():+.2f} (its e-GMM seed SD {sd[da.idxmax()]:.1f}); polish without early stop max |d| "

@@ -5,7 +5,11 @@ Source: `dev.csv`, `holdout.csv`, `diag.csv`, `large.csv` and `summary.txt` in t
 control `TorchBatchGMM_f32chol` on near-singular holdout data (recorded, excluded only for that method).
 `dev`, `diag` and `large` are development evidence; `holdout` rows are post hoc.
 
-## 1. Stronger batch-EM baselines (the main reviewer request)
+> Sections 1-7 report the first follow-up sessions. Their speed numbers are **superseded** by the re-timing in
+> section 8 (batch EM checking convergence every iteration), which the paper uses; the scikit-learn NLL
+> comparison in the paper is seed-matched (-1.17 / -0.37), not the 3-seed mean used in section 7.
+
+## 1. Stronger batch-EM baselines
 * The CUDA-graph batch EM (`TorchBatchGMM_graph`) is the fastest batch-EM variant on 29/33 development
   and 15/16 holdout datasets (1.8x / 2.9x faster than the paper's `TorchBatchGMM`). Removing host syncs
   without a graph (`_fast`) barely helps. At large N with full covariance the graph variant is *slower*
@@ -76,3 +80,17 @@ check-interval *estimate* used in an earlier draft; the paper's speed numbers co
   nats (covtype_581k); float64 takes 2.4x as long.
 * The fixed-budget graph runs in speed2 include one warm-up iteration; speed2b times each budget in both the
   graph and the sync-light implementation and the analysis keeps the faster one.
+
+## 9. Checks after the second set of reviews (speed2c, speed2d, speed2e; 2026-11-16)
+* 500 iterations without early stopping (seed 0): batch EM still 0.29-1.09 nats worse than e-GMM on the
+  full-covariance large datasets (4.8 on HIGGS); unchanged after 100 iterations on the synthetic mixtures,
+  still slowly improving on SUSY and HIGGS.
+* Revival: e-GMM vs e-GMM without revival at large N 5/3/0 (median -0.32); without revival e-GMM is level
+  with batch EM (2/1/2). Batch EM with e-GMM's revival operator (after iterations 2, 4, 6, 8) gains a median
+  0.29 nats but still loses 5/0/0 (median -0.55) at ~5-22x e-GMM's time. Tuned stepwise online EM at large N
+  loses 5/0/0 (median -0.54) at 1.6x e-GMM's time. So online phase + revival together beat batch EM.
+* HIGGS without its four 3-valued b-tag features: e-GMM only -0.11 nats vs batch EM (3/3 seeds), 20x faster.
+* Diagonal mixtures with larger batch-EM chunks (256k/1M rows): e-GMM's lead falls to 1.3-1.5x.
+* The large synthetic generators contain 0-3 true components below the 0.05/K revival threshold.
+* On the high-dimensional diagonal datasets the deployed alpha_0 is the rule's floor (0.40-0.48), not the
+  0.68 cap; the alpha_0 = 0.85 diagnostic also raised alpha_min (0.04 -> 0.085).

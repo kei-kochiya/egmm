@@ -19,7 +19,7 @@ the submitted paper; results land in `docs/experiments/next/`.
    better test likelihood than batch EM? Evaluated offline from independent single-start fits, with two
    selection rules (training log-likelihood; validation NLL).
 
-4. **External review (review.txt) requests**, all without library changes (`experiments/next/variants.py`):
+4. **Further controls**, all without library changes (`experiments/next/variants.py`):
    eager e-GMM without the per-step alpha synchronization (`EGMM_eager_hostalpha`); single-factor schedule
    ablations inside the full e-GMM pipeline (`EGMM_sched_rm`: alpha_t = (t + 2)^-0.7; `EGMM_sched_const`:
    the cosine schedule's mean); on the holdout (post hoc) `OnlineGMM_tuned`, `OnlineGMM_matched_polish`
@@ -54,7 +54,7 @@ the submitted paper; results land in `docs/experiments/next/`.
   p < 0.05 against the fastest batch-EM variant on the development suite before a holdout is planned.
 * Large N: report per-dataset times and NLLs; no significance test (n = 6 synthetic datasets).
 
-## Re-timing after the mock reviews: `speed2` and `speed2b` (run 2026-11-16)
+## Re-timing with every-iteration convergence checks: `speed2` and `speed2b` (run 2026-11-16)
 
 The first sessions' sync-light and graph variants read the convergence test only every 5 iterations (up to 4
 extra iterations; the graph variant also runs one discarded warm-up iteration). The paper's speed results now
@@ -62,6 +62,9 @@ come from a re-timing that adds variants checking every iteration:
 
     python experiments/next/run_next.py --stages speed2      # speed2_{dev,holdout,large}.csv  (~133 min)
     python experiments/next/run_next.py --stages speed2b     # speed2b_large.csv               (~60 min)
+    python experiments/next/run_next.py --stages speed2c     # speed2c_large.csv: 100/500-iteration batch EM, seed 0 (~27 min)
+    python experiments/next/run_next.py --stages speed2d     # e-GMM without revival; HIGGS without b-tags (~12 min)
+    python experiments/next/run_next.py --stages speed2e     # batch EM + revival, online EM, larger chunks (~45 min)
 
 `speed2` adds `_fast1`/`_graph1`, logs executed iterations and GPU clock/temperature/power per (dataset, seed),
 an `EGMM_f64` run on full-covariance development datasets, and at large N full-data-seeded batch EM

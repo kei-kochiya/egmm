@@ -3,17 +3,19 @@
 `e-GMM` = mini-batch online EM for Gaussian mixtures on GPU/CPU (PyTorch, scikit-learn-like API), plus a paper.
 Repo `github.com/kei-kochiya/egmm`, branch `main`. This file is excluded from the supplementary archive.
 
-## Status (2026-11-15)
+## Status (2026-11-16)
 
 * **Paper submitted to TMLR** (double-blind, Long submission) on 2026-11-15; the submitted version is kept
   privately in `docs/submission/submitted_tmlr_2026-11-15/` (source commit 80ee180).
-* **Revised version in `paper/` (not uploaded to OpenReview; the author decides when).** It adds stronger
-  batch-EM baselines, 8 datasets with 1-10M rows, schedule/revival ablations and the review.txt text fixes
-  (Section 5.3, Appendix E). Main text now ends on p.14 (Long submission, so no 12-page limit; do not bloat).
-  Five rounds of mock review so far; the last (3 reviewers on the revision) were all "leaning accept,
-  conditional", and their text-level issues are fixed.
-* **arXiv preprint** built in `dist/arxiv/` from the submitted version; waiting for endorsement (cs.LG).
-  Rebuild it from the revision before uploading.
+* **Revised version in `paper/` (not uploaded to OpenReview; the author decides when).** Main text ends on
+  p.14 (Long submission; keep it from growing). It adds the follow-up runs of `experiments/next/` (stronger
+  batch EM, 1-10M-row datasets with equal-pass / equal-quality / revival checks, schedule and revival
+  ablations), an evidence map (Table 1), and a method glossary.
+* **Mock reviews:** two waves of 3 reviewers on the revision, all "leaning accept, no blocking issue" after
+  fixes. Wave 3 is pending (the author will ask). Remaining non-blocking requests: tighter Section 5
+  (fewer statistics in the main text), Linux/datacenter GPU check, tuned Robbins-Monro / averaged online EM.
+* **arXiv dropped** by the author; `dist/` was deleted. `python experiments/make_supplementary.py`
+  recreates the anonymized supplementary zip when a revision is uploaded.
 
 ## Hard rules
 
@@ -47,7 +49,7 @@ Repo `github.com/kei-kochiya/egmm`, branch `main`. This file is excluded from th
 | `experiments/design_studies/`, `fit_scaling_laws.py`, `run_small_dataset_eval.py`, `plot_results.py` | side studies, figures |
 | `docs/experiments/` | CSV logs (source of truth), `stats_summary.txt`, `egmm_findings.md`, pre-registration |
 | `paper/` | `main.tex`, `references.bib`, TMLR style, `generated/`, `figures/`, `make_arxiv.py` |
-| `dist/`, `data/` (git-ignored) | submission ZIP + arXiv bundle; OpenML cache (337 MB, needed for reruns) |
+| `data/` (git-ignored) | OpenML cache (337 MB, needed for reruns); `data/large/` HIGGS/SUSY (3.7 GB) |
 | `docs/references/e_means/` | mirrored third-party e-means code, reference only |
 
 ## Commands (Windows; use `src:.` on Linux)
@@ -60,7 +62,6 @@ python experiments/analyze_results.py && python experiments/verify_tables.py
 python experiments/plot_results.py && cp docs/experiments/fig_*.png paper/figures/
 cd paper && tectonic -X compile main.tex                     # this machine: C:/Users/Admin/tools/tectonic/tectonic.exe (0.15.0)
 python experiments/make_supplementary.py                     # -> dist/supplementary_anonymized.zip
-TECTONIC=/path/to/tectonic python paper/make_arxiv.py        # -> dist/arxiv/ (preprint PDF + source ZIP)
 ```
 
 Full reproduction order and runtimes: `ENVIRONMENT.md`; exact versions: `requirements-lock.txt`.
@@ -81,16 +82,15 @@ Positioning: as accurate as batch EM on unseen data; faster only at large N; not
 
 ## Open items
 
-1. **Pending GPU run (author said "run it later"):** `python experiments/next/run_next.py --stages speed2`
-   (~90 min) replaces the check-interval *estimate* with measurements and adds full-data-seeded batch EM,
-   batch-EM/e-GMM budget curves at large N and an e-GMM float64 check (see `experiments/next/README.md`).
-   Then point `paper_results.py` at the speed2 CSVs and update Section 5.3 / Appendix E.
-   Still open from the mock reviews (need runs or are optional): schedule ablation at large N and on the
-   holdout, a tuned Robbins-Monro alternative, more real large datasets / K / D, peak memory, naming table.
+1. **Next: review wave 3** (when the author asks): 3 fresh reviewers (Opus/Sonnet) on `paper/main.pdf`, verify
+   every claim against code and logs, fix. All follow-up GPU stages are done (`run_next.py` stages speed2,
+   speed2b-e; results in `docs/experiments/next/FINDINGS.md` sections 8-9). Optional, non-blocking runs:
+   schedule ablation at large N and on the holdout, a tuned Robbins-Monro / averaged online EM, more real large
+   datasets / K / D, peak memory, a Linux or datacenter GPU.
 2. Other plausible requests: external GPU GMM library comparison (needs a package install, ask first),
    another GPU/OS, peak memory, sensitivity to K.
-3. arXiv: after endorsement upload `dist/arxiv/egmm_arxiv_source.zip`; authors field "Tuan Khoi Ho";
-   license CC BY; cs.LG + stat.ML cross-list.
+3. Disk: `data/` is ~4 GB (git-ignored): HIGGS Parquet 2.0 GB, SUSY 0.9 GB plus a redundant original
+   download `data/large/susy.zip` (0.9 GB), OpenML cache 0.3 GB. Large-N reruns need `data/large/`.
 4. After the review: library hardening (license is the author's choice; packaging, input validation, docs,
    CI; no numerics changes); follow-up paper on "better than batch EM" (restarts, convergence-aware polish,
    an alpha_0 guard for diagonal mode) with a second pre-registered holdout that states a primary hypothesis

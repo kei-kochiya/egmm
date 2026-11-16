@@ -2,7 +2,7 @@
 
 Both classes run the same algorithm and stopping rule as ``egmm.baselines.TorchBatchGMM`` (full-batch EM,
 ``max_iter`` / ``tol`` on the per-sample training log-likelihood) and the same kernels, but remove the
-implementation overheads that a reviewer could call a straw man:
+avoidable implementation overheads:
 
 * ``TorchBatchGMMFast``: float32 inner Cholesky with the branchless diagonal fallback and no ``info``
   synchronization (as e-GMM's EMA steps), the log-likelihood kept on the device, the convergence test run
@@ -175,4 +175,59 @@ class TorchBatchGMMGraph(TorchBatchGMMFast):
         return result
 
 
-__all__ = ["TorchBatchGMMFast", "TorchBatchGMMGraph"]
+__all__ = ["TorchBatchGMMFast", "TorchBatchGMMGraph", "TorchBatchGMMRevival"]
+
+
+class TorchBatchGMMRevival(TorchBatchGMMFast):
+    """Control: sync-light batch EM (convergence read every iteration) with e-GMM's revival
+    operator applied after iterations ``revive_at`` (the library's ``revive_dead_components``: same dead-mass
+    threshold, donor ranking and Wedderburn split as e-GMM). Stopping is allowed only once two iterations have
+    followed the last revival, so a revival can never trigger the convergence test."""
+
+    def __init__(self, *args, revive_at: tuple[int, ...] = (1, 3, 5, 7), dead_ratio: float = 0.05, **kwargs) -> None:
+        kwargs["check_every"] = 1
+        super().__init__(*args, **kwargs)
+        self.revive_at = tuple(revive_at)
+        self.dead_ratio = dead_ratio
+
+    def _run_batch_em(self, X_std, M, S, Q, max_iters):
+        from egmm.revival import revive_dead_components
+
+        N = X_std.shape[0]
+        dev = X_std.device
+        dtype = X_std.dtype
+        log_jac = float(self._log_jac_t.item())
+        weights, means, _, prec_factor, log_det_half = self._proj_fast(M, S, Q, dtype)
+        lbs = torch.zeros(max_iters, dtype=torch.float64, device=dev)
+        min_stop = max(self.revive_at) + 2 if self.revive_at else 1
+        self.n_revivals_ = 0
+        vals: list[float] = []
+        state = None
+        for it in range(max_iters):
+            M_acc, S_acc, Q_acc = torch.zeros_like(M), torch.zeros_like(S), torch.zeros_like(Q)
+            ll_sum = torch.zeros((), device=dev, dtype=torch.float64)
+            for start in range(0, N, self.chunk_size):
+                end = min(N, start + self.chunk_size)
+                _, batch_lb, m_bar, s_bar, q_bar = e_step_batch(
+                    X_std[start:end], weights, means, covariance_type=self.covariance_type,
+                    prec_factor=prec_factor, log_det_half=log_det_half, stats_dtype=M.dtype,
+                )
+                frac = (end - start) / N
+                M_acc += m_bar.to(M.dtype) * frac
+                S_acc += s_bar.to(S.dtype) * frac
+                Q_acc += q_bar.to(Q.dtype) * frac
+                ll_sum = ll_sum + batch_lb.to(torch.float64) * (end - start)
+            lbs[it] = ll_sum / N
+            M, S, Q = M_acc, S_acc, Q_acc
+            if it in self.revive_at:
+                M, S, Q, n_rev = revive_dead_components(M, S, Q, covariance_type=self.covariance_type,
+                                                        reg_covar=self.reg_covar, dead_ratio=self.dead_ratio)
+                self.n_revivals_ += int(n_rev)
+            state = (M, S, Q)
+            weights, means, _, prec_factor, log_det_half = self._proj_fast(M, S, Q, dtype)
+            vals = [v + log_jac for v in lbs[: it + 1].cpu().tolist()]
+            if it >= min_stop and abs(vals[it] - vals[it - 1]) < self.tol:
+                self.n_iter_executed_ = it + 1
+                return self._finish(X_std, state, it, vals, max_iters, True)
+        self.n_iter_executed_ = max_iters
+        return self._finish(X_std, state, max_iters - 1, vals, max_iters, False)

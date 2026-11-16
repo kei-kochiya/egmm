@@ -17,7 +17,7 @@ Stages (every stage interleaves all its methods in one session, in a shuffled or
   are in ``data/large/``): e-GMM (r0..r2 and n3), the fast and graph batch EM, ``TorchBatchGMM`` and, at
   N <= 1M only, standardized scikit-learn (seed 0, one timing).
 
-* ``speed2`` (prepared after the mock reviews, run only when the GPU is free): re-times the development,
+* ``speed2``: re-times the development,
   holdout and large-N suites (one session each: ``speed2_dev``, ``speed2_holdout``, ``speed2_large``) with
   batch-EM variants that check convergence every iteration (``_fast1``, ``_graph1``) next to the 5-iteration
   ones, logging executed iterations and GPU clock/temperature per (dataset, seed); adds an e-GMM float64
@@ -46,7 +46,7 @@ from egmm.baselines import CappeMoulinesOnlineGMM, StandardizedSklearnGMM, Torch
 from egmm.estimator import EGMM
 from egmm.scaling import auto_hyperparameters
 from experiments.datasets import DatasetSplit, load_benchmark_suite
-from experiments.next.baselines_fast import TorchBatchGMMFast, TorchBatchGMMGraph
+from experiments.next.baselines_fast import TorchBatchGMMFast, TorchBatchGMMGraph, TorchBatchGMMRevival
 from experiments.next.variants import ConstantStepEGMM, EagerEGMMHostAlpha, RobbinsMonroEGMM
 from experiments.run_benchmark_suite import EagerEGMM, TorchBatchGMMF32Chol, evaluate_model, tune_online_em
 
@@ -79,7 +79,7 @@ def egmm_family(K, cov, device, seed, n_single, with_n3=True, with_eager=False):
 
 
 def schedule_family(K, cov, device, seed):
-    """Review request: single-factor schedule ablations inside the full e-GMM pipeline (development suite)."""
+    """Single-factor schedule ablations inside the full e-GMM pipeline (development suite)."""
     return {
         "EGMM_sched_rm": RobbinsMonroEGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
         "EGMM_sched_const": ConstantStepEGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
@@ -87,7 +87,7 @@ def schedule_family(K, cov, device, seed):
 
 
 def online_family(ds, device, seed, tuned_cache):
-    """Review request (holdout, post hoc): tuned online EM, online EM with e-GMM's exact polish budget and
+    """Holdout, post hoc: tuned online EM, online EM with e-GMM's exact polish budget and
     s_init (as in the paper's ablation), and e-GMM without revival."""
     N, D = ds.X_train.shape
     K, cov = ds.n_components, ds.recommended_cov
@@ -108,7 +108,7 @@ def online_family(ds, device, seed, tuned_cache):
 
 
 def diag_family(ds, device, seed):
-    """Review request: which rule drives the high-dimensional diagonal losses? One factor at a time."""
+    """Which rule drives the high-dimensional diagonal losses? Diagnostic changes on diagonal datasets."""
     N, D = ds.X_train.shape
     K = ds.n_components
     hp = auto_hyperparameters(N, K, D, "diag")
@@ -125,7 +125,7 @@ def diag_family(ds, device, seed):
 
 
 def speed2_family(K, cov, device, seed, large=False, with_f64=False):
-    """Re-timing after the mock reviews: every-iteration convergence checks next to the 5-iteration ones."""
+    """Re-timing: every-iteration convergence checks next to the 5-iteration ones."""
     common = dict(n_components=K, covariance_type=cov, max_iter=50, tol=1e-3, device=device, random_state=seed)
     m = {
         "EGMM_r0": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
@@ -299,7 +299,7 @@ def stage_speed2b(device, smoke=False, sizes=("1m", "3m", "10m")):
 
 
 def stage_speed2c(device, smoke=False):
-    """speed2c (after the first review wave): does batch EM ever reach e-GMM on the full-covariance large
+    """speed2c: does batch EM ever reach e-GMM on the full-covariance large
     datasets? Batch EM without early stopping for 100 and 500 iterations (graph, convergence read every iteration),
     seed 0, one timed fit each, next to e-GMM in the same session."""
     from experiments.next.large_data import REAL_LARGE, SYNTHETIC_LARGE, load_real_large, make_large_synthetic
@@ -328,7 +328,7 @@ def stage_speed2c(device, smoke=False):
 
 
 def stage_speed2d(device, smoke=False):
-    """speed2d (after the first review wave): (a) e-GMM without revival at large N (is the large-N quality gap a
+    """speed2d: (a) e-GMM without revival at large N (is the large-N quality gap a
     revival effect?), next to e-GMM in the same session; (b) HIGGS without its four three-valued b-tag features
     (is the HIGGS gap a discrete-feature effect?), with e-GMM, e-GMM without revival, float64 eager and sync-light
     batch EM, and batch EM seeded on all rows (one timed fit each)."""
@@ -361,6 +361,42 @@ def stage_speed2d(device, smoke=False):
                 "TorchBatchGMM_fullinit": TorchBatchGMMFullInit(**common)}
 
     run_stage(("smoke_" if smoke else "") + "speed2d_higgscont", higgs_cont(), mk, device, 1, seeds=seeds)
+
+
+def stage_speed2e(device, repeats, smoke=False):
+    """speed2e, at 1-10M rows in one session:
+    full covariance: batch EM with e-GMM's revival operator, and validation-tuned stepwise online EM;
+    diagonal covariance: batch EM with larger E-step chunks (fewer launches, cheaper graph capture);
+    each next to e-GMM and the default-chunk sync-light / graph batch EM (convergence read every iteration)."""
+    from experiments.next.large_data import iter_large_suite, make_large_synthetic
+
+    seeds = SEEDS if not smoke else (0,)
+    large = (iter_large_suite(include_real=True) if not smoke
+             else [make_large_synthetic("smoke_large_full", 20_000, 8, 4, "full", 12.0, 1),
+                   make_large_synthetic("smoke_large_diag", 20_000, 16, 4, "diag", 10.0, 2)])
+    tuned: dict = {}
+
+    def mk(ds, seed):
+        K, cov = ds.n_components, ds.recommended_cov
+        common = dict(n_components=K, covariance_type=cov, max_iter=50, tol=1e-3, device=device, random_state=seed)
+        m = {"EGMM_r0": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
+             "TorchBatchGMM_fast1": TorchBatchGMMFast(**common, check_every=1),
+             "TorchBatchGMM_graph1": TorchBatchGMMGraph(**common, check_every=1)}
+        if cov == "full":
+            m["TorchBatchGMM_revival"] = TorchBatchGMMRevival(**common)
+            if ds.name not in tuned:
+                tuned[ds.name] = tune_online_em(ds, device=device, seed=0)
+            rho, bs = tuned[ds.name]
+            m["OnlineGMM_tuned"] = CappeMoulinesOnlineGMM(n_components=K, covariance_type=cov, max_epochs=3, batch_size=bs,
+                                                          rho=rho, device=device, random_state=seed)
+        else:
+            for c in (262_144, 1_048_576):
+                tag = f"c{c // 1024}k"
+                m[f"TorchBatchGMM_fast1_{tag}"] = TorchBatchGMMFast(**common, check_every=1, chunk_size=c)
+                m[f"TorchBatchGMM_graph1_{tag}"] = TorchBatchGMMGraph(**common, check_every=1, chunk_size=c)
+        return m
+
+    run_stage(("smoke_" if smoke else "") + "speed2e_large", large, mk, device, 3 if not smoke else 1, seeds=seeds)
 
 
 def smoke_datasets():
@@ -397,6 +433,8 @@ def main() -> None:
         stage_speed2c(args.device, args.smoke)
     if "speed2d" in stages:
         stage_speed2d(args.device, args.smoke)
+    if "speed2e" in stages:
+        stage_speed2e(args.device, repeats, args.smoke)
     print(f"all stages done in {(time.time() - t0) / 60:.1f} min", flush=True)
 
 

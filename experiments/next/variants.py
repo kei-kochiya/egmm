@@ -1,4 +1,4 @@
-"""e-GMM variants requested by the external review (review.txt), defined outside the frozen library.
+"""e-GMM variants for the follow-up runs, defined outside the frozen library.
 
 * ``EagerEGMMHostAlpha``: the eager (no CUDA graph) e-GMM with the step-size schedule held on the host, so the
   eager loop no longer synchronizes with the GPU at every step to read alpha_t. ``EGMM`` vs this variant
