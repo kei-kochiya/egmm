@@ -54,21 +54,20 @@ the submitted paper; results land in `docs/experiments/next/`.
   p < 0.05 against the fastest batch-EM variant on the development suite before a holdout is planned.
 * Large N: report per-dataset times and NLLs; no significance test (n = 6 synthetic datasets).
 
-## Pending: `speed2` re-timing (prepared 2026-11-15, not yet run; GPU ~90 min)
+## Re-timing after the mock reviews: `speed2` and `speed2b` (run 2026-11-16)
 
-The mock reviews of the revised paper found that `TorchBatchGMM_fast`/`_graph` read the convergence test only
-every 5 iterations and so execute up to 4 extra iterations (the graph variant also runs one discarded warm-up
-iteration). The paper currently reports measured speedups plus a conservative estimate for a check every
-iteration (`paper_results._adjust_check_interval`). To replace the estimate with measurements:
+The first sessions' sync-light and graph variants read the convergence test only every 5 iterations (up to 4
+extra iterations; the graph variant also runs one discarded warm-up iteration). The paper's speed results now
+come from a re-timing that adds variants checking every iteration:
 
-    python experiments/next/run_next.py --stages speed2      # -> speed2_dev.csv, speed2_holdout.csv, speed2_large.csv
+    python experiments/next/run_next.py --stages speed2      # speed2_{dev,holdout,large}.csv  (~133 min)
+    python experiments/next/run_next.py --stages speed2b     # speed2b_large.csv               (~60 min)
 
-Adds `_fast1`/`_graph1` (check every iteration), logs executed iterations and GPU clock/temperature/power per
-(dataset, seed), an `EGMM_f64` run on full-covariance development datasets (float32 vs float64 training), and
-at large N full-data-seeded batch EM (`TorchBatchGMM_fullinit`) and budget curves (`TorchBatchGMM_it{2..20}`,
-`EGMM_e{1,3}`) for time-to-quality comparisons. Afterwards: point `paper_results.py` at the speed2 CSVs for
-the time reference (fastest of eager, fast, fast1, graph, graph1), drop the estimate, and add the budget curves.
-Smoke test: `CUDA_VISIBLE_DEVICES=-1 python experiments/next/run_next.py --stages speed2 --smoke --device cpu`.
+`speed2` adds `_fast1`/`_graph1`, logs executed iterations and GPU clock/temperature/power per (dataset, seed),
+an `EGMM_f64` run on full-covariance development datasets, and at large N full-data-seeded batch EM
+(`TorchBatchGMM_fullinit`). `speed2b` times fixed batch-EM budgets (2-20 iterations) in both the graph and the
+sync-light implementation next to e-GMM with 1-3 epochs. Analysis: `speed2_results.py` (called from
+`paper_results.py`); figures: `plot_speed.py`. Results: `docs/experiments/next/FINDINGS.md`, section 8.
 
 ## Runtime estimate (RTX 5070)
 

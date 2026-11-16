@@ -7,10 +7,8 @@ use 3-seed dataset means, the 1e-3 tie band and two-sided Wilcoxon tests exactly
   TorchBatchGMM, TorchBatchGMM_f32chol, TorchBatchGMM_fast and TorchBatchGMM_graph (failed fits excluded).
 * Quality reference: always the float64 eager TorchBatchGMM. The faster variants factorize in float32, which
   changes their NLL (and stopping iteration) on some real datasets, so they are used for time only.
-* The sync-light and graph variants read the convergence test every 5 iterations and therefore execute up to
-  4 iterations past the stopping iteration (the graph variant also runs one discarded warm-up iteration before
-  capture). ``_adjust_check_interval`` estimates their time with a check every iteration by scaling the logged
-  time by needed / executed iterations; it scales the fixed costs too, so it favors batch EM.
+* Speed comparisons, the large-N tables and the time-to-quality results come from the speed2 re-timing
+  (``speed2_results.py``), which adds batch-EM variants that check convergence every iteration.
 """
 
 from __future__ import annotations
@@ -25,7 +23,6 @@ BATCH = ["TorchBatchGMM", "TorchBatchGMM_f32chol", "TorchBatchGMM_fast", "TorchB
 SHORT = {"TorchBatchGMM": "eager", "TorchBatchGMM_f32chol": "f32chol", "TorchBatchGMM_fast": "fast",
          "TorchBatchGMM_graph": "graph"}
 LARGE_N = 100_000
-MAX_ITER, CHECK = 50, 5
 ARTIFACTS = ("eeg_eye_state", "ailerons")
 
 
@@ -37,19 +34,8 @@ def _load(exp: Path, stage: str) -> pd.DataFrame | None:
     return d[d["error"].fillna("") == ""] if "error" in d.columns else d
 
 
-def _adjust_check_interval(df: pd.DataFrame) -> pd.DataFrame:
-    d = df.copy()
-    n = d["n_iter"].astype(float)
-    e = np.minimum(MAX_ITER, CHECK * np.ceil(n / CHECK))
-    f = d["method"] == "TorchBatchGMM_fast"
-    g = d["method"] == "TorchBatchGMM_graph"
-    d.loc[f, "fit_time"] = d.loc[f, "fit_time"] * n[f] / e[f]
-    d.loc[g, "fit_time"] = d.loc[g, "fit_time"] * (n[g] + 1.0) / (e[g] + 1.0)
-    return d
-
-
-def _add_best(df: pd.DataFrame, name: str, adjust: bool = False) -> tuple[pd.DataFrame, pd.Series]:
-    src = _adjust_check_interval(df) if adjust else df
+def _add_best(df: pd.DataFrame, name: str) -> tuple[pd.DataFrame, pd.Series]:
+    src = df
     t = src[src["method"].isin(BATCH)].groupby(["dataset", "method"])["fit_time"].mean().unstack()
     best = t.idxmin(axis=1)
     rows = [src[(src["dataset"] == ds) & (src["method"] == m)].assign(method=name) for ds, m in best.items()]
@@ -88,6 +74,9 @@ def add_next_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> No
     if dev is None or ho is None or large is None:
         lines.append("\n(follow-up runs not found; revised-paper macros skipped)")
         return
+    raw = [pd.read_csv(exp / "next" / f"{x}.csv") for x in ("dev", "holdout", "diag", "large")]
+    macros["XNFits"] = f"{sum(len(r) for r in raw):,}".replace(",", "{,}")
+    macros["XNFail"] = str(sum(int((r["error"].fillna("") != "").sum()) for r in raw))
     lines.append("\n=== Revised paper: follow-up runs (docs/experiments/next; one session per suite) ===")
     p = lambda v: fmt_p(v).strip("$")  # noqa: E731
 
@@ -97,57 +86,12 @@ def add_next_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> No
     macros["HoSlowestTBName"], macros["HoSlowestTBSpd"] = _tex(hr.index[0]), f"{hr.iloc[0]:.2f}"
     macros["HoSlowerTBN"] = str(int((hr < 1).sum()))
 
-    # ---------------- speed against the fastest batch-EM variant (logged and check-interval-adjusted)
-    suites = {}
-    for tag, df, label in [("Dev", dev, "development"), ("Ho", ho, "holdout (post hoc)"), ("Lg", large, "large N")]:
-        dfb, best = _add_best(df, "BatchBest")
-        dfb, best_adj = _add_best(dfb, "BatchBestAdj", adjust=True)
-        n_ds = df.groupby("dataset")["N_train"].first()
-        spd = _time_ratio(dfb, "BatchBest")
-        spd_adj = _time_ratio(dfb, "BatchBestAdj")
-        suites[tag] = (dfb, best, spd, spd_adj, n_ds)
-        macros[f"Xn{tag}"] = str(len(spd))
-        macros[f"X{tag}BestSpd"] = f"{spd.median():.2f}"
-        macros[f"X{tag}BestAdj"] = f"{spd_adj.median():.2f}"
-        macros[f"X{tag}GraphFastest"] = str(int((best == "TorchBatchGMM_graph").sum()))
-        for sub, msk in [("Small", n_ds[spd.index] <= LARGE_N), ("Large", n_ds[spd.index] > LARGE_N)]:
-            if msk.sum():
-                macros[f"Xn{tag}{sub}"] = str(int(msk.sum()))
-                macros[f"X{tag}{sub}Spd"] = f"{spd[msk].median():.2f}"
-                macros[f"X{tag}{sub}Faster"] = str(int((spd[msk] > 1).sum()))
-                macros[f"X{tag}{sub}Adj"] = f"{spd_adj[msk].median():.2f}"
-                macros[f"X{tag}{sub}AdjMin"] = f"{spd_adj[msk].min():.2f}"
-                macros[f"X{tag}{sub}AdjMax"] = f"{spd_adj[msk].max():.0f}"
-                if msk.sum() >= 6:
-                    lo, hi, cov = _median_ci(spd[msk])
-                    macros[f"X{tag}{sub}CI"] = f"{lo:.2f}--{hi:.2f}"  # text mode
-                    macros[f"X{tag}{sub}Cov"] = f"{cov:.0f}"
-        lines.append(f"{label}: e-GMM vs fastest batch EM: median {spd.median():.2f}x (faster on {int((spd > 1).sum())}/{len(spd)}); "
-                     f"with every-iteration checks (estimate) {spd_adj.median():.2f}x; fastest variant {best.value_counts().to_dict()}")
-    macros["XDevBestSlower"] = str(int((suites["Dev"][2] <= 1).sum()))
-    lg_spd, lg_adj = suites["Lg"][2], suites["Lg"][3]
-    macros["XLgMinSpd"], macros["XLgMaxSpd"] = f"{lg_spd.min():.1f}", f"{lg_spd.max():.0f}"
-    macros["XLgAdjMin"], macros["XLgAdjMax"] = f"{lg_adj.min():.1f}", f"{lg_adj.max():.0f}"
-    lines.append(f"large N per-dataset speedups vs fastest: {lg_spd.round(2).to_dict()}; adjusted {lg_adj.round(2).to_dict()}")
-
-    # Table 2: four strata; speed vs each variant, vs the fastest (logged and adjusted); quality vs float64 TorchBatchGMM
-    rows = []
-    devb, hob, lab = suites["Dev"][0], suites["Ho"][0], suites["Lg"][0]
-    n_dev, n_ho = suites["Dev"][4], suites["Ho"][4]
-    groups = [(r"Development, $N_{\mathrm{train}} \le 10^5$", devb[devb["dataset"].isin(n_dev[n_dev <= LARGE_N].index)]),
-              (r"Development, $N_{\mathrm{train}} > 10^5$", devb[devb["dataset"].isin(n_dev[n_dev > LARGE_N].index)]),
-              (r"Holdout, $N_{\mathrm{train}} \le 10^5$ (post hoc)", hob[hob["dataset"].isin(n_ho[n_ho <= LARGE_N].index)]),
-              (r"Large $N$ ($1$--$10$\,M rows)", lab)]
-    for name, d in groups:
-        cells = []
-        for b in ["TorchBatchGMM", "TorchBatchGMM_fast", "TorchBatchGMM_graph", "BatchBest", "BatchBestAdj"]:
-            r = _time_ratio(d, b)
-            cells.append(f"${r.median():.2f}\\times$ ({int((r > 1).sum())}/{len(r)})")
-        q = pair_stats(d, "EGMM_r0", "TorchBatchGMM")
-        cells.append(f"{q['W']}/{q['T']}/{q['L']}")
-        cells.append(_signed(q["med_dnll"]))
-        rows.append(f"{name} & " + " & ".join(cells) + " \\\\")
-    (gen / "tab_speed_next.tex").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    # fastest batch-EM variant per dataset in the first follow-up sessions (time budget for the restarts below;
+    # the paper's speed comparisons use the speed2 re-timing, speed2_results.py)
+    best_old = {}
+    for tag, df in [("Dev", dev), ("Lg", large)]:
+        best_old[tag] = _add_best(df, "BatchBest")[1]
+    n_dev = dev.groupby("dataset")["N_train"].first()
 
     # ---------------- what the faster variants change: NLL (float32 factorization) and stopping iteration
     worst, best_gain, it_diff = [], [], {}
@@ -243,57 +187,14 @@ def add_next_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> No
                 lines.append(f"best-of-{R} ({rule}) {tag} vs TorchBatchGMM NLL: W/T/L {w}/{t}/{l_}, median {d.median():+.3f}, raw p "
                              f"{fmt_p_txt(pv)}; time ratio fastest batch / restarts {pk['ratio'].median():.2f}")
 
-    restarts(dev, suites["Dev"][1], "Dev", (2, 3))
-    restarts(large, suites["Lg"][1], "Lg", (2, 3))
+    restarts(dev, best_old["Dev"], "Dev", (2, 3))
+    restarts(large, best_old["Lg"], "Lg", (2, 3))
     n3 = dev[dev["method"] == "EGMM_n3"].groupby("dataset")["fit_time"].mean()
     s3 = dev[dev["method"].isin(["EGMM_r0", "EGMM_r1", "EGMM_r2"])].groupby(["dataset", "method"])["fit_time"].mean().unstack().sum(axis=1)
     macros["XNinitRatio"] = f"{(n3 / s3.loc[n3.index]).median():.2f}"
 
-    # ---------------- large-N table and macros (quality vs float64 TorchBatchGMM; the variants agree exactly here)
-    adj = _adjust_check_interval(large)
-    g = large.groupby(["dataset", "method"])[["fit_time", "test_nll", "dead_components"]].mean().unstack()
-    ga = adj.groupby(["dataset", "method"])["fit_time"].mean().unstack()
+    # ---------------- scikit-learn at 1M rows (first large-N session; compared with e-GMM from the same session)
     meta = large.groupby("dataset")[["N_train", "D", "K", "cov_type"]].first()
-    best_lg, best_adj_lg = suites["Lg"][1], ga[BATCH].idxmin(axis=1)
-    t_rows, dq = [], {}
-    order = meta.assign(real=[0 if d.startswith("syn") else 1 for d in meta.index]).sort_values(["real", "cov_type", "N_train"],
-                                                                                                ascending=[True, False, True])
-    for ds in order.index:
-        n, dd, k, cov = meta.loc[ds]
-        te = g.loc[ds, ("fit_time", "EGMM_r0")]
-        tb, tba = g.loc[ds, ("fit_time", best_lg[ds])], ga.loc[ds, best_adj_lg[ds]]
-        dn = g.loc[ds, ("test_nll", "EGMM_r0")] - g.loc[ds, ("test_nll", "TorchBatchGMM")]
-        dq[ds] = dn
-        name = {"higgs": "HIGGS", "susy": "SUSY"}.get(ds, "synthetic")
-        times = " & ".join(f"{g.loc[ds, ('fit_time', m)]:.2f}" for m in ["TorchBatchGMM", "TorchBatchGMM_fast", "TorchBatchGMM_graph"])
-        t_rows.append(f"{name} & {n / 1e6:.1f} & {dd} & {cov} & {te:.2f} & {times} & {SHORT[best_lg[ds]]} & ${tb / te:.1f}\\times$ & "
-                      f"${tba / te:.1f}\\times$ & {_signed(dn)} & {g.loc[ds, ('dead_components', 'TorchBatchGMM')]:.1f} \\\\")
-        if not ds.startswith("syn"):  # synthetic names collide once digits are stripped; only real sets get macros
-            macros[f"XLg{ds}Spd"] = f"{tb / te:.0f}" if tb / te >= 10 else f"{tb / te:.1f}"
-            macros[f"XLg{ds}dNLL"] = f"{dn:+.2f}"
-            macros[f"XLg{ds}DeadTB"] = f"{g.loc[ds, ('dead_components', 'TorchBatchGMM')]:.1f}"
-    (gen / "tab_large.tex").write_text("\n".join(t_rows) + "\n", encoding="utf-8")
-    dq = pd.Series(dq)
-    q = pair_stats(large, "EGMM_r0", "TorchBatchGMM")
-    macros["XLgTBWTL"], macros["XLgTBdNLL"] = f"{q['W']}/{q['T']}/{q['L']}", f"{q['med_dnll']:+.2f}"
-    macros["XLgNBetter"], macros["XLgNEqual"] = str(int((dq < -0.1).sum())), str(int((dq.abs() < 0.01).sum()))
-    macros["XLgBetterMin"] = f"{-dq[dq < -0.1].max():.2f}"
-    macros["XLgDeadEGMMMax"] = f"{g['dead_components']['EGMM_r0'].max():.1f}"
-    it = large.groupby(["dataset", "method"])["n_iter"].mean().unstack()
-    syn_ds = [d for d in it.index if d.startswith("syn")]
-    syn_seed = large[(large["method"] == "TorchBatchGMM") & large["dataset"].isin(syn_ds)]["n_iter"]
-    macros["XLgTBIterSynMin"], macros["XLgTBIterSynMax"] = f"{syn_seed.min():.0f}", f"{syn_seed.max():.0f}"
-    hig = large[(large["method"] == "TorchBatchGMM") & (large["dataset"] == "higgs")]["n_iter"]
-    macros["XLgTBIterHiggsMin"], macros["XLgTBIterHiggsMax"] = f"{hig.min():.0f}", f"{hig.max():.0f}"
-    macros["XLgTBIterSusy"] = f"{it.loc['susy', 'TorchBatchGMM']:.0f}"
-    macros["XLgEGMMPasses"] = f"{it['EGMM_r0'].median():.0f}"
-    lines.append(f"large N: NLL vs TorchBatchGMM {dq.round(4).to_dict()}; TorchBatchGMM iterations per run synthetic {syn_seed.min():.0f}-"
-                 f"{syn_seed.max():.0f}, HIGGS {hig.min():.0f}-{hig.max():.0f}, SUSY {it.loc['susy', 'TorchBatchGMM']:.0f}")
-    syn = [d for d in lg_spd.index if d.startswith("syn")]
-    for cov in ("full", "diag"):
-        sel = [d for d in syn if meta.loc[d, "cov_type"] == cov]
-        macros[f"XLgSyn{cov.capitalize()}Min"], macros[f"XLgSyn{cov.capitalize()}Max"] = f"{lg_spd[sel].min():.1f}", f"{lg_spd[sel].max():.1f}"
-        macros[f"XLgSyn{cov.capitalize()}AdjMin"], macros[f"XLgSyn{cov.capitalize()}AdjMax"] = f"{lg_adj[sel].min():.1f}", f"{lg_adj[sel].max():.1f}"
     sk = large[large["method"] == "StdSklearnGMM"]
     for ds in sk["dataset"].unique():
         cov = meta.loc[ds, "cov_type"].capitalize()
@@ -301,13 +202,13 @@ def add_next_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> No
         eg = large[(large["dataset"] == ds) & (large["method"] == "EGMM_r0")]
         macros[f"XSk{cov}Time"] = f"{ts:.0f}"
         macros[f"XSk{cov}Ratio"] = f"{ts / eg[eg['seed'] == 0]['fit_time'].mean():.0f}"  # same seed as the single sklearn fit
-        macros[f"XSk{cov}dNLL"] = f"{eg['test_nll'].mean() - sk[sk['dataset'] == ds]['test_nll'].mean():+.2f}"  # e-GMM 3-seed mean
+        macros[f"XSk{cov}dNLL"] = f"{eg[eg['seed'] == 0]['test_nll'].mean() - sk[sk['dataset'] == ds]['test_nll'].mean():+.2f}"  # seed-matched (seed 0)
 
     # ---------------- diagonal-covariance diagnostics (appendix table)
     if diag is not None:
         gd = diag.groupby(["dataset", "method"])["test_nll"].mean().unstack()
         md = diag.groupby("dataset")[["N_train", "D", "regime"]].first()
-        cols = ["EGMM_polish0", "EGMM_a085", "EGMM_ep2x", "EGMM_notol", "TorchBatchGMM"]
+        cols = ["EGMM_polish0", "EGMM_a085", "EGMM_ep2x", "TorchBatchGMM"]  # notol is reported in the text (no effect)
         d_rows = []
         for ds in md.sort_values(["regime", "D"]).index:
             n, dd, reg = md.loc[ds]
@@ -329,3 +230,7 @@ def add_next_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> No
         lines.append(f"diag: alpha0=0.85 vs deployed: improves >1 nat on {len(big)}/{len(da)} ({', '.join(big.index)}); worst {da.idxmax()} "
                      f"{da.max():+.2f} (its e-GMM seed SD {sd[da.idxmax()]:.1f}); polish without early stop max |d| "
                      f"{(gd['EGMM_notol'] - gd['EGMM_r0']).abs().max():.4f}")
+
+    from experiments.next.speed2_results import add_speed2_results
+
+    add_speed2_results(exp, gen, macros, lines)

@@ -23,6 +23,8 @@ Stages (every stage interleaves all its methods in one session, in a shuffled or
   ones, logging executed iterations and GPU clock/temperature per (dataset, seed); adds an e-GMM float64
   training run on full-covariance development datasets, and at large N full-data-seeded batch EM and
   budget curves (batch EM with 2-20 iterations, e-GMM with 1-3 epochs) for time-to-quality comparisons.
+* ``speed2b``: the large-N budget curves again, each budget in both the graph (one warm-up iteration) and the
+  sync-light implementation (none), with e-GMM at 1-3 epochs in the same session.
 
 All results go to ``docs/experiments/next/*.csv`` (rewritten after each dataset); analysis:
 ``experiments/next/analyze_next.py``. The library (``src/egmm``) is not modified.
@@ -141,6 +143,18 @@ def speed2_family(K, cov, device, seed, large=False, with_f64=False):
             m[f"TorchBatchGMM_it{it}"] = TorchBatchGMMGraph(**{**common, "max_iter": it, "tol": 0.0}, check_every=1)
         for ep in (1, 3):  # e-GMM budget curve (at this N there is no polish)
             m[f"EGMM_e{ep}"] = EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed, max_epochs=ep)
+    return m
+
+
+def budget_family(K, cov, device, seed):
+    """speed2b: fixed-budget batch EM in both fast implementations (the graph one runs a warm-up iteration, the
+    sync-light one does not), next to e-GMM at 1-3 epochs, so each budget can use its faster implementation."""
+    common = dict(n_components=K, covariance_type=cov, tol=0.0, device=device, random_state=seed)
+    m = {f"EGMM_e{ep}": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed, max_epochs=ep) for ep in (1, 3)}
+    m["EGMM_r0"] = EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed)
+    for it in (2, 3, 5, 10, 20):
+        m[f"TorchBatchGMM_graph1_it{it}"] = TorchBatchGMMGraph(**common, max_iter=it, check_every=1)
+        m[f"TorchBatchGMM_fast1_it{it}"] = TorchBatchGMMFast(**common, max_iter=it, check_every=1)
     return m
 
 
@@ -275,6 +289,80 @@ def stage_speed2(device, repeats, smoke=False, sizes=("1m", "3m", "10m")):
                                                                           large=True), device, 3 if not smoke else 1, seeds=seeds)
 
 
+def stage_speed2b(device, smoke=False, sizes=("1m", "3m", "10m")):
+    from experiments.next.large_data import iter_large_suite, make_large_synthetic
+    large = (iter_large_suite(include_real=True, sizes=sizes) if not smoke
+             else [make_large_synthetic("smoke_large_full", 20_000, 8, 4, "full", 12.0, 1)])
+    run_stage(("smoke_" if smoke else "") + "speed2b_large", large,
+              lambda ds, seed: budget_family(ds.n_components, ds.recommended_cov, device, seed), device,
+              3 if not smoke else 1, seeds=SEEDS if not smoke else (0,))
+
+
+def stage_speed2c(device, smoke=False):
+    """speed2c (after the first review wave): does batch EM ever reach e-GMM on the full-covariance large
+    datasets? Batch EM without early stopping for 100 and 500 iterations (graph, convergence read every iteration),
+    seed 0, one timed fit each, next to e-GMM in the same session."""
+    from experiments.next.large_data import REAL_LARGE, SYNTHETIC_LARGE, load_real_large, make_large_synthetic
+
+    def datasets():
+        if smoke:
+            yield make_large_synthetic("smoke_large_full", 20_000, 8, 4, "full", 12.0, 1)
+            return
+        for name, n, d, k, cov, aniso, sd in SYNTHETIC_LARGE:
+            if cov == "full":
+                yield make_large_synthetic(name, n, d, k, cov, aniso, sd)
+        for key in REAL_LARGE:
+            ds = load_real_large(key)
+            if ds is not None:
+                yield ds
+
+    def mk(ds, seed):
+        K, cov = ds.n_components, ds.recommended_cov
+        m = {"EGMM_r0": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed)}
+        for it in (100, 500):
+            m[f"TorchBatchGMM_graph1_it{it}"] = TorchBatchGMMGraph(n_components=K, covariance_type=cov, tol=0.0, max_iter=it,
+                                                                   device=device, random_state=seed, check_every=1)
+        return m
+
+    run_stage(("smoke_" if smoke else "") + "speed2c_large", datasets(), mk, device, 1, seeds=(0,))
+
+
+def stage_speed2d(device, smoke=False):
+    """speed2d (after the first review wave): (a) e-GMM without revival at large N (is the large-N quality gap a
+    revival effect?), next to e-GMM in the same session; (b) HIGGS without its four three-valued b-tag features
+    (is the HIGGS gap a discrete-feature effect?), with e-GMM, e-GMM without revival, float64 eager and sync-light
+    batch EM, and batch EM seeded on all rows (one timed fit each)."""
+    from dataclasses import replace
+
+    from experiments.next.large_data import iter_large_suite, load_real_large, make_large_synthetic
+
+    def egmm_pair(ds, seed):
+        K, cov = ds.n_components, ds.recommended_cov
+        return {"EGMM_r0": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
+                "EGMM_no_revival": EGMM(n_components=K, covariance_type=cov, revive_dead=False, device=device, random_state=seed)}
+
+    seeds = SEEDS if not smoke else (0,)
+    large = (iter_large_suite(include_real=True) if not smoke
+             else [make_large_synthetic("smoke_large_full", 20_000, 8, 4, "full", 12.0, 1)])
+    run_stage(("smoke_" if smoke else "") + "speed2d_large", large, egmm_pair, device, 3 if not smoke else 1, seeds=seeds)
+
+    def higgs_cont():
+        ds = load_real_large("higgs") if not smoke else make_large_synthetic("smoke_large_full", 20_000, 24, 4, "full", 12.0, 1)
+        if ds is None:
+            return
+        keep = [j for j in range(ds.X_train.shape[1]) if j not in (8, 12, 16, 20)]  # drop the b-tag columns
+        yield replace(ds, name="higgs_cont", X_train=ds.X_train[:, keep], X_val=ds.X_val[:, keep], X_test=ds.X_test[:, keep])
+
+    def mk(ds, seed):
+        K, cov = ds.n_components, ds.recommended_cov
+        common = dict(n_components=K, covariance_type=cov, max_iter=50, tol=1e-3, device=device, random_state=seed)
+        return {**egmm_pair(ds, seed), "TorchBatchGMM": TorchBatchGMM(**common),
+                "TorchBatchGMM_fast1": TorchBatchGMMFast(**common, check_every=1),
+                "TorchBatchGMM_fullinit": TorchBatchGMMFullInit(**common)}
+
+    run_stage(("smoke_" if smoke else "") + "speed2d_higgscont", higgs_cont(), mk, device, 1, seeds=seeds)
+
+
 def smoke_datasets():
     from experiments.datasets import _make_hard_synthetic
     return [_make_hard_synthetic("smoke_full", "smoke", 6_000, 8, 6, 7, "full"),
@@ -303,6 +391,12 @@ def main() -> None:
         stage_large(args.device, 3 if not args.smoke else 1, args.smoke, tuple(args.large_sizes.split(",")))
     if "speed2" in stages:
         stage_speed2(args.device, repeats, args.smoke, tuple(args.large_sizes.split(",")))
+    if "speed2b" in stages:
+        stage_speed2b(args.device, args.smoke, tuple(args.large_sizes.split(",")))
+    if "speed2c" in stages:
+        stage_speed2c(args.device, args.smoke)
+    if "speed2d" in stages:
+        stage_speed2d(args.device, args.smoke)
     print(f"all stages done in {(time.time() - t0) / 60:.1f} min", flush=True)
 
 

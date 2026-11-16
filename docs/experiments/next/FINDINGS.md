@@ -59,3 +59,20 @@ control `TorchBatchGMM_f32chol` on near-singular holdout data (recorded, exclude
   HIGGS: -4.08 nats at 20x; SUSY: -0.48 nats at 22x (batch EM hits its 50-iteration cap on millions of rows).
 * Standardized scikit-learn at 1M rows (seed 0): 173 s (full) and 43 s (diagonal) vs 0.30 s / 0.11 s for
   e-GMM; NLL better for e-GMM on full (-1.03), worse on diagonal (+0.60).
+
+## 8. Re-timing with every-iteration convergence checks (speed2, 2026-11-16, 133 min; speed2b, 59 min)
+Source: `speed2_{dev,holdout,large}.csv`, `speed2b_large.csv` (no failed fits). These replace the
+check-interval *estimate* used in an earlier draft; the paper's speed numbers come from here.
+* Fastest batch EM per dataset (eager, sync-light or graph, checking convergence every 5 or every iteration):
+  e-GMM median 1.15x on development N <= 1e5 (17/26 faster), 1.00x on holdout N <= 1e5 (8/15),
+  2.67x on development N > 1e5 (7/7), 1.8-22.6x (median 3.2x) at 1-10M rows (8/8).
+  Checking every iteration matters little on small data (graph-5 / graph-1 time 1.02) and ~1.18x at large N.
+* Equal quality at 1-10M rows: on all 5 full-covariance datasets no batch-EM run (2-20 iterations, default
+  stopping, or seeded on all rows) reaches e-GMM's test NLL within 0.01 nats; on the 3 diagonal mixtures batch
+  EM matches it at 1.3-2.2x e-GMM's time. Batch EM with the same 2 passes takes ~1.1x e-GMM's time and is worse
+  on all 8 (median -0.6 nats; HIGGS -8.4). Full-data seeding does not close the gap (6/0/2 for e-GMM).
+* e-GMM with 3 epochs is worse than 2 on 3 of 8 (HIGGS +1.3 nats): more epochs do not always help.
+* e-GMM float32 vs float64 training on the 25 full-covariance development datasets: 19 ties, max |d| 0.40
+  nats (covtype_581k); float64 takes 2.4x as long.
+* The fixed-budget graph runs in speed2 include one warm-up iteration; speed2b times each budget in both the
+  graph and the sync-light implementation and the analysis keeps the faster one.
