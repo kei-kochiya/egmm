@@ -113,8 +113,8 @@ check-interval *estimate* used in an earlier draft; the paper's speed numbers co
 * With the count fixed, batch EM with revival at four checkpoints revives 0-11.7 components per fit (HIGGS 11.7,
   synthetic 0-2), against 2.3-24.3 for e-GMM: batch EM leaves few components dead, so revival has little to do.
 * Matched-intensity control (`TorchBatchGMM_forced`): at the same four checkpoints the lowest-mass components
-  are marked dead and re-split by the library's revival operator, so batch EM makes at least as many split moves
-  as e-GMM (3-24 per fit). e-GMM still wins 5/0/0 (median -0.87; HIGGS -1.87; 14/15 seeds; 4/0/0 without
+  are marked dead and re-split by the library's revival operator, so batch EM makes about as many split moves
+  as e-GMM (the rounded mean e-GMM count plus natural deaths: 3-24 per fit vs 2.3-24.3; 24.0 vs 24.3 on HIGGS). e-GMM still wins 5/0/0 (median -0.87; HIGGS -1.87; 14/15 seeds; 4/0/0 without
   HIGGS) at ~8.6x e-GMM's time. Forced splits vs revival only for batch EM: better on HIGGS/SUSY, worse on the
   three synthetic mixtures (2/0/3). The number of split moves alone does not explain e-GMM's advantage.
 * Speed reference sensitivity (no new run): restricted to batch-EM variants that stop at the float64 run's

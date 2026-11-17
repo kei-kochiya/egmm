@@ -67,7 +67,7 @@ come from a re-timing that adds variants checking every iteration:
     python experiments/next/run_next.py --stages speed2e     # batch EM + revival, online EM, larger chunks (~45 min)
     python experiments/next/run_next.py --stages speed2f     # batch EM with revival after each of 20 iterations (~10 min)
     python experiments/next/run_next.py --stages speed2g     # schedule at large N, online EM + revival, subsampled batch EM, dequantized HIGGS (~16 min)
-    python experiments/next/run_next.py --stages speed2h     # batch EM with as many forced splits as e-GMM revives; revival count logged (~15 min)
+    python experiments/next/run_next.py --stages speed2h     # batch EM with about as many forced splits as e-GMM revives; revival count logged (~15 min)
     python experiments/next/oracle_nll.py                    # oracle test NLL of the synthetic large mixtures (CPU, ~10 min)
 
 The `revivals` column of `speed2e`/`speed2f` is 0 for the batch-EM revival controls: the library's `TorchBatchGMM.fit`

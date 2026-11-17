@@ -487,7 +487,7 @@ def stage_speed2g(device, repeats, smoke=False):
 
 def stage_speed2h(device, smoke=False):
     """speed2h: matched-intensity split control on the full-covariance 1-10M-row datasets. Batch EM (sync-light,
-    convergence read every iteration) gets as many split moves as e-GMM makes (its mean revival count per dataset
+    convergence read every iteration) gets about as many split moves as e-GMM makes (its rounded mean revival count per dataset
     in speed2d_large.csv), spread over four checkpoints after iterations 2, 4, 6 and 8: at each, the lowest-mass
     components are marked dead and re-seeded by the library's revival operator. Also re-runs the four-checkpoint
     revival control with its revival count logged. One timed fit each; NLL is the target."""

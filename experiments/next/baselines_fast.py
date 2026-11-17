@@ -250,7 +250,7 @@ class TorchBatchGMMForcedSplit(TorchBatchGMMRevival):
     ``revive_at``. At each checkpoint the lowest-mass components up to that checkpoint's quota are marked dead
     (their statistics are zeroed, so the next E-step reassigns their points) and the library's revival operator
     re-seeds every dead component by splitting a high-variance donor, as in e-GMM. ``n_forced`` is set per
-    dataset to e-GMM's mean revival count, so batch EM gets as many split moves as e-GMM makes."""
+    dataset to e-GMM's rounded mean revival count, so batch EM gets about as many split moves as e-GMM makes."""
 
     def __init__(self, *args, n_forced: int = 8, **kwargs) -> None:
         super().__init__(*args, **kwargs)
