@@ -46,7 +46,8 @@ from egmm.baselines import CappeMoulinesOnlineGMM, StandardizedSklearnGMM, Torch
 from egmm.estimator import EGMM
 from egmm.scaling import auto_hyperparameters
 from experiments.datasets import DatasetSplit, load_benchmark_suite
-from experiments.next.baselines_fast import TorchBatchGMMFast, TorchBatchGMMGraph, TorchBatchGMMRevival, TorchBatchGMMSubsample
+from experiments.next.baselines_fast import (TorchBatchGMMFast, TorchBatchGMMForcedSplit, TorchBatchGMMGraph,
+                                             TorchBatchGMMRevival, TorchBatchGMMSubsample)
 from experiments.next.variants import ConstantStepEGMM, EagerEGMMHostAlpha, OnlineGMMRevival, RobbinsMonroEGMM
 from experiments.run_benchmark_suite import EagerEGMM, TorchBatchGMMF32Chol, evaluate_model, tune_online_em
 
@@ -484,6 +485,41 @@ def stage_speed2g(device, repeats, smoke=False):
     run_stage(("smoke_" if smoke else "") + "speed2g_higgsdq", higgs_dequant(), mk2, device, 1, seeds=seeds)
 
 
+def stage_speed2h(device, smoke=False):
+    """speed2h: matched-intensity split control on the full-covariance 1-10M-row datasets. Batch EM (sync-light,
+    convergence read every iteration) gets as many split moves as e-GMM makes (its mean revival count per dataset
+    in speed2d_large.csv), spread over four checkpoints after iterations 2, 4, 6 and 8: at each, the lowest-mass
+    components are marked dead and re-seeded by the library's revival operator. Also re-runs the four-checkpoint
+    revival control with its revival count logged. One timed fit each; NLL is the target."""
+    from experiments.next.large_data import REAL_LARGE, SYNTHETIC_LARGE, load_real_large, make_large_synthetic
+
+    rev = {}
+    if not smoke:
+        d = pd.read_csv(OUT / "speed2d_large.csv")
+        rev = d[d["method"] == "EGMM_r0"].groupby("dataset")["revivals"].mean().round().astype(int).to_dict()
+
+    def datasets():
+        if smoke:
+            yield make_large_synthetic("smoke_large_full", 20_000, 8, 4, "full", 12.0, 1)
+            return
+        for name, n, d_, k, cov, aniso, sd in SYNTHETIC_LARGE:
+            if cov == "full":
+                yield make_large_synthetic(name, n, d_, k, cov, aniso, sd)
+        for key in REAL_LARGE:
+            ds = load_real_large(key)
+            if ds is not None:
+                yield ds
+
+    def mk(ds, seed):
+        K, cov = ds.n_components, ds.recommended_cov
+        common = dict(n_components=K, covariance_type=cov, max_iter=50, tol=1e-3, device=device, random_state=seed)
+        return {"EGMM_r0": EGMM(n_components=K, covariance_type=cov, device=device, random_state=seed),
+                "TorchBatchGMM_revival": TorchBatchGMMRevival(**common),
+                "TorchBatchGMM_forced": TorchBatchGMMForcedSplit(**common, n_forced=rev.get(ds.name, 4))}
+
+    run_stage(("smoke_" if smoke else "") + "speed2h_large", datasets(), mk, device, 1, seeds=SEEDS if not smoke else (0,))
+
+
 def smoke_datasets():
     from experiments.datasets import _make_hard_synthetic
     return [_make_hard_synthetic("smoke_full", "smoke", 6_000, 8, 6, 7, "full"),
@@ -524,6 +560,8 @@ def main() -> None:
         stage_speed2f(args.device, args.smoke)
     if "speed2g" in stages:
         stage_speed2g(args.device, repeats, args.smoke)
+    if "speed2h" in stages:
+        stage_speed2h(args.device, args.smoke)
     print(f"all stages done in {(time.time() - t0) / 60:.1f} min", flush=True)
 
 

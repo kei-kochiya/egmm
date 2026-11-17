@@ -221,6 +221,7 @@ class TorchBatchGMMRevival(TorchBatchGMMFast):
             lbs[it] = ll_sum / N
             M, S, Q = M_acc, S_acc, Q_acc
             if it in self.revive_at:
+                M, S, Q = self._before_revival(M, S, Q, self.revive_at.index(it))
                 M, S, Q, n_rev = revive_dead_components(M, S, Q, covariance_type=self.covariance_type,
                                                         reg_covar=self.reg_covar, dead_ratio=self.dead_ratio)
                 self.n_revivals_ += int(n_rev)
@@ -233,6 +234,39 @@ class TorchBatchGMMRevival(TorchBatchGMMFast):
                 return self._finish(X_std, state, it, vals, max_iters, True)
         self.n_iter_executed_ = max_iters
         return self._finish(X_std, state, max_iters - 1, vals, max_iters, False)
+
+    def _before_revival(self, M, S, Q, ckpt: int):
+        return M, S, Q
+
+    def fit(self, X, y=None):
+        super().fit(X, y)
+        # the library's TorchBatchGMM.fit resets revivals_count_ to 0 after the EM loop; restore the count
+        self.revivals_count_ = int(getattr(self, "n_revivals_", 0))
+        return self
+
+
+class TorchBatchGMMForcedSplit(TorchBatchGMMRevival):
+    """Matched-intensity control: batch EM with ``n_forced`` split moves in total, spread over the checkpoints
+    ``revive_at``. At each checkpoint the lowest-mass components up to that checkpoint's quota are marked dead
+    (their statistics are zeroed, so the next E-step reassigns their points) and the library's revival operator
+    re-seeds every dead component by splitting a high-variance donor, as in e-GMM. ``n_forced`` is set per
+    dataset to e-GMM's mean revival count, so batch EM gets as many split moves as e-GMM makes."""
+
+    def __init__(self, *args, n_forced: int = 8, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.n_forced = int(n_forced)
+
+    def _before_revival(self, M, S, Q, ckpt: int):
+        n_ck = len(self.revive_at)
+        quota = self.n_forced // n_ck + (1 if ckpt < self.n_forced % n_ck else 0)
+        if quota <= 0:
+            return M, S, Q
+        idx = torch.argsort(M)[:quota]
+        M, S, Q = M.clone(), S.clone(), Q.clone()
+        M[idx] = 0
+        S[idx] = 0
+        Q[idx] = 0
+        return M, S, Q
 
 
 class TorchBatchGMMSubsample(TorchBatchGMMGraph):

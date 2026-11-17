@@ -105,3 +105,20 @@ check-interval *estimate* used in an earlier draft; the paper's speed numbers co
 * Oracle (true generating mixture): e-GMM 0.57-0.69 nats above it on the full-covariance synthetic sets,
   batch EM 1.17-1.76; on the diagonal sets both 0.80-1.92.
 
+
+## 11. Checks after the fourth set of reviews (speed2h; 2026-11-17, 8 min)
+* Logging bug: `TorchBatchGMM.fit` (frozen library) resets `revivals_count_` after the EM loop, so the
+  `revivals` column of the batch-EM revival controls in speed2e/speed2f is 0. Fixed in `TorchBatchGMMRevival.fit`
+  (unit test `test_revival_controls_log_their_split_count_cpu`); NLLs and dead counts were never affected.
+* With the count fixed, batch EM with revival at four checkpoints revives 0-11.7 components per fit (HIGGS 11.7,
+  synthetic 0-2), against 2.3-24.3 for e-GMM: batch EM leaves few components dead, so revival has little to do.
+* Matched-intensity control (`TorchBatchGMM_forced`): at the same four checkpoints the lowest-mass components
+  are marked dead and re-split by the library's revival operator, so batch EM makes at least as many split moves
+  as e-GMM (3-24 per fit). e-GMM still wins 5/0/0 (median -0.87; HIGGS -1.87; 14/15 seeds; 4/0/0 without
+  HIGGS) at ~8.6x e-GMM's time. Forced splits vs revival only for batch EM: better on HIGGS/SUSY, worse on the
+  three synthetic mixtures (2/0/3). The number of split moves alone does not explain e-GMM's advantage.
+* Speed reference sensitivity (no new run): restricted to batch-EM variants that stop at the float64 run's
+  iteration on every seed, e-GMM's median speedup at N <= 1e5 is 1.30x (dev) and 1.83x (holdout) instead of
+  1.15x and 1.00x, so the fastest-variant reference is conservative.
+* Single e-GMM start vs best of 3 batch-EM starts (validation NLL) at large N: 4/0/1 on full covariance (one
+  loss, 0.07 nats on syn3m_full), 4/0/4 overall; now reported in Section 5.3.

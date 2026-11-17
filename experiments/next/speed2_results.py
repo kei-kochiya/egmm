@@ -96,6 +96,20 @@ def add_speed2_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> 
                 macros[f"S{tag}{sub}Cov"] = f"{cov:.0f}"
         lines.append(f"{label}: e-GMM vs fastest batch EM: median {spd.median():.2f}x (faster on {int((spd > 1).sum())}/{len(spd)}); "
                      f"fastest variant {best.value_counts().to_dict()}; graph-5/graph-1 time {macros[f'S{tag}CheckOne']}")
+        if tag in ("Dev", "Ho"):
+            # sensitivity: per dataset, the fastest variant among those that stop at the float64 TorchBatchGMM's
+            # iteration on every seed (the eager TorchBatchGMM always qualifies)
+            ok = df[df["error"].fillna("") == ""] if "error" in df else df
+            ref = ok[ok["method"] == "TorchBatchGMM"].set_index(["dataset", "seed"])["n_iter"]
+            v = ok[ok["method"].isin(TIMED)].set_index(["dataset", "seed"])
+            same = (v["n_iter"] == ref.reindex(v.index)).groupby([v.index.get_level_values(0), v["method"]]).all().unstack()
+            te = ok[ok["method"] == "EGMM_r0"].groupby("dataset")["fit_time"].mean()
+            sm = (g[TIMED].where(same[TIMED]).min(axis=1) / te).dropna()
+            small = n_ds[n_ds <= LARGE_N].index.intersection(sm.index)
+            macros[f"S{tag}SmallSpdMatched"] = f"{sm[small].median():.2f}"
+            macros[f"S{tag}SmallMismatchDs"] = str(int((~same.loc[small, TIMED]).any(axis=1).sum()))
+            lines.append(f"  {label}, N<=1e5, iteration-matched variants only: median {sm[small].median():.2f}x "
+                         f"({int((~same.loc[small, TIMED]).any(axis=1).sum())} datasets with a mismatching variant)")
     lg_spd = suites["Lg"][2]
     macros["SLgMinSpd"] = f"{lg_spd.min():.1f}"
     macros["SLgMaxSpd"] = f"{lg_spd.max():.0f}"
@@ -264,6 +278,7 @@ def add_speed2_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> 
     d33 = best3_eg - best3_tb               # best of 3 starts on both sides
     macros["SLgBestThreeWTL"] = "/".join(str(x) for x in wtl(d3))
     macros["SLgBestThreeFullWTL"] = "/".join(str(x) for x in wtl(d3[full_ds]))
+    macros["SLgBestThreeFullWorst"] = f"{d3[full_ds].max():.2f}"
     macros["SLgBothThreeWTL"] = "/".join(str(x) for x in wtl(d33))
     lines.append(f"large N, e-GMM (3-seed mean) minus the best of batch EM's 3 seeds by validation NLL: {d3.round(3).to_dict()}")
     lines.append(f"large N, best of 3 e-GMM seeds minus best of 3 batch-EM seeds (both by validation NLL): {d33.round(3).to_dict()}")
@@ -439,13 +454,43 @@ def add_speed2_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> 
         macros["SfEveryNoHiggs"] = f"{int((d_ev_n < -1e-3).sum())}/{len(d_ev_n)}"
         macros["SfEveryHiggs"] = f"{d_every['higgs']:+.2f}" if "higgs" in d_every.index else "--"
         macros["SfEveryDeadMax"] = f"{gf['dead_components']['TorchBatchGMM_revival_every'].max():.1f}"
-        macros["SfEveryRevMax"] = f"{gf['revivals']['TorchBatchGMM_revival_every'].max():.0f}"
         macros["SfEveryTime"] = f"{(gf['fit_time']['TorchBatchGMM_revival_every'] / gf['fit_time']['EGMM_r0']).median():.0f}"
         ps_ = sf.pivot_table(index=["dataset", "seed"], columns="method", values="test_nll")
         macros["SfEverySeedWins"] = f"{int((ps_['EGMM_r0'] < ps_['TorchBatchGMM_revival_every'] - 1e-3).sum())}/{len(ps_)}"
         lines.append(f"speed2f: e-GMM minus batch EM with revival after each of 20 iterations {d_every.round(3).to_dict()}; "
-                     f"dead {gf['dead_components']['TorchBatchGMM_revival_every'].round(2).to_dict()}; revivals "
-                     f"{gf['revivals']['TorchBatchGMM_revival_every'].round(1).to_dict()}; per seed {macros['SfEverySeedWins']}")
+                     f"dead {gf['dead_components']['TorchBatchGMM_revival_every'].round(2).to_dict()}; per seed "
+                     f"{macros['SfEverySeedWins']} (the revivals column of speed2e/f is 0 because TorchBatchGMM.fit reset the "
+                     f"count; fixed and logged in speed2h)")
+
+    # ---------------- speed2h: matched-intensity split control; revival count of the four-checkpoint control
+    sh_ = _load(exp, "speed2h_large")
+    if sh_ is not None and sh_["dataset"].nunique() >= 5:
+        gh = sh_.groupby(["dataset", "method"])[["test_nll", "fit_time", "dead_components", "revivals"]].mean().unstack()
+        nh, th, rh = gh["test_nll"], gh["fit_time"], gh["revivals"]
+        d_f = nh["EGMM_r0"] - nh["TorchBatchGMM_forced"]
+        d_r = nh["EGMM_r0"] - nh["TorchBatchGMM_revival"]
+        macros["ShForcedWTL"] = "/".join(str(x) for x in wtl(d_f))
+        macros["ShForceddNLL"] = f"{d_f.median():+.2f}"
+        macros["ShForcedNoHiggs"] = "/".join(str(x) for x in wtl(d_f.drop("higgs", errors="ignore")))
+        macros["ShForcedHiggs"] = f"{d_f['higgs']:+.2f}" if "higgs" in d_f.index else "--"
+        macros["ShForcedTime"] = f"{(th['TorchBatchGMM_forced'] / th['EGMM_r0']).median():.1f}"
+        macros["ShForcedMin"] = f"{rh['TorchBatchGMM_forced'].min():.0f}"
+        macros["ShForcedMax"] = f"{rh['TorchBatchGMM_forced'].max():.0f}"
+        macros["ShEgRevMin"], macros["ShEgRevMax"] = f"{rh['EGMM_r0'].min():.1f}", f"{rh['EGMM_r0'].max():.1f}"
+        macros["ShRevMin"] = f"{rh['TorchBatchGMM_revival'].min():.1f}"
+        macros["ShRevMax"] = f"{rh['TorchBatchGMM_revival'].max():.1f}"
+        macros["ShRevWTL"] = "/".join(str(x) for x in wtl(d_r))
+        fr = nh["TorchBatchGMM_revival"] - nh["TorchBatchGMM_forced"]  # > 0: the extra forced splits help batch EM
+        macros["ShForcedVsRev"] = f"{fr.median():+.2f}"
+        macros["ShForcedVsRevWTL"] = "/".join(str(x) for x in wtl(-fr))  # W: forced better than revival only
+        psh = sh_.pivot_table(index=["dataset", "seed"], columns="method", values="test_nll")
+        macros["ShForcedSeedWins"] = f"{int((psh['EGMM_r0'] < psh['TorchBatchGMM_forced'] - 1e-3).sum())}/{len(psh)}"
+        lines.append(f"speed2h: e-GMM minus batch EM with matched forced splits {d_f.round(3).to_dict()} (per seed "
+                     f"{macros['ShForcedSeedWins']}; time / e-GMM {(th['TorchBatchGMM_forced'] / th['EGMM_r0']).round(1).to_dict()})")
+        lines.append(f"speed2h split moves per fit: forced {rh['TorchBatchGMM_forced'].round(1).to_dict()}, e-GMM "
+                     f"{rh['EGMM_r0'].round(1).to_dict()}, revival control {rh['TorchBatchGMM_revival'].round(1).to_dict()}")
+        lines.append(f"speed2h: revival-only minus forced batch EM NLL {fr.round(3).to_dict()}; e-GMM minus revival control "
+                     f"{d_r.round(3).to_dict()}")
 
     # ---------------- speed2g: schedule at large N, online EM with revival, subsampled batch EM, HIGGS dequantized
     sg = _load(exp, "speed2g_large")

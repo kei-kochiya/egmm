@@ -3,7 +3,7 @@
 `e-GMM` = mini-batch online EM for Gaussian mixtures on GPU/CPU (PyTorch, scikit-learn-like API), plus a paper.
 Repo `github.com/kei-kochiya/egmm`, branch `main`. This file is excluded from the supplementary archive.
 
-## Status (2026-11-16)
+## Status (2026-11-17)
 
 * **Paper submitted to TMLR** (double-blind, Long submission) on 2026-11-15; the submitted version is kept
   privately in `docs/submission/submitted_tmlr_2026-11-15/` (source commit 80ee180).
@@ -11,9 +11,12 @@ Repo `github.com/kei-kochiya/egmm`, branch `main`. This file is excluded from th
   p.14 (Long submission; keep it from growing). It adds the follow-up runs of `experiments/next/` (stronger
   batch EM, 1-10M-row datasets with equal-pass / equal-quality / revival checks, schedule and revival
   ablations), an evidence map (Table 1), and a method glossary.
-* **Mock reviews:** two waves of 3 reviewers on the revision, all "leaning accept, no blocking issue" after
-  fixes. Wave 3 is pending (the author will ask). Remaining non-blocking requests: tighter Section 5
-  (fewer statistics in the main text), Linux/datacenter GPU check, tuned Robbins-Monro / averaged online EM.
+* **Mock reviews:** four waves of 3 reviewers on the revision (majors per wave 12, 10, 9, 8; blocking issues
+  only in wave 1), every reviewer "leaning accept"; all fixes applied (wave 4: matched-intensity split control
+  `speed2h`, revival-count logging fix, App E session table, scoped abstract/Table 1/conclusion). Remaining
+  non-blocking requests: a pre-registered large-N holdout, the title word "Fast" (one reviewer asked to drop it;
+  the author's call), tighter Section 5, Linux/datacenter GPU, external GPU GMM library, tuned Robbins-Monro /
+  averaged online EM.
 * **arXiv dropped** by the author; `dist/` was deleted. `python experiments/make_supplementary.py`
   recreates the anonymized supplementary zip when a revision is uploaded.
 
@@ -82,11 +85,10 @@ Positioning: as accurate as batch EM on unseen data; faster only at large N; not
 
 ## Open items
 
-1. **Next: review wave 3** (when the author asks): 3 fresh reviewers (Opus/Sonnet) on `paper/main.pdf`, verify
-   every claim against code and logs, fix. All follow-up GPU stages are done (`run_next.py` stages speed2,
-   speed2b-e; results in `docs/experiments/next/FINDINGS.md` sections 8-9). Optional, non-blocking runs:
-   schedule ablation at large N and on the holdout, a tuned Robbins-Monro / averaged online EM, more real large
-   datasets / K / D, peak memory, a Linux or datacenter GPU.
+1. **Review waves done** (4 waves; see Status). All follow-up GPU stages are done (`run_next.py` stages speed2,
+   speed2b-h; results in `docs/experiments/next/FINDINGS.md` sections 8-11). Optional, non-blocking runs:
+   schedule ablation on the holdout, a tuned Robbins-Monro / averaged online EM, more real large datasets / K / D,
+   peak memory, a Linux or datacenter GPU, and (strongest) a pre-registered holdout of large datasets.
 2. Other plausible requests: external GPU GMM library comparison (needs a package install, ask first),
    another GPU/OS, peak memory, sensitivity to K.
 3. Disk: `data/` is ~4 GB (git-ignored): HIGGS Parquet 2.0 GB, SUSY 0.9 GB plus a redundant original

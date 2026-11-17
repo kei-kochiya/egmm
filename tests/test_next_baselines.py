@@ -40,3 +40,16 @@ def test_graph_matches_reference_cuda(cov):
         m = _fit(cls, X, "cuda", cov)
         assert m.n_iter_ == ref.n_iter_
         assert abs(m.score(X) - ref.score(X)) < 1e-3
+
+
+def test_revival_controls_log_their_split_count_cpu():
+    """TorchBatchGMM.fit resets revivals_count_ after the EM loop; the revival controls must restore it, and the
+    matched-intensity control must make exactly n_forced split moves (well-separated data: no natural deaths)."""
+    from experiments.next.baselines_fast import TorchBatchGMMForcedSplit, TorchBatchGMMRevival
+
+    X = _data(seed=2)
+    rev = _fit(TorchBatchGMMRevival, X, "cpu", "full")
+    assert rev.revivals_count_ == rev.n_revivals_
+    forced = _fit(TorchBatchGMMForcedSplit, X, "cpu", "full", n_forced=6)
+    assert forced.revivals_count_ == forced.n_revivals_ == 6
+    assert np.isfinite(forced.score(X))
