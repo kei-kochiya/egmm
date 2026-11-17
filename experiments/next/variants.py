@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from egmm.baselines import CappeMoulinesOnlineGMM
 from egmm.estimator import EGMM
 from experiments.run_benchmark_suite import EagerEGMM
 
@@ -33,3 +34,11 @@ class RobbinsMonroEGMM(EGMM):
 class ConstantStepEGMM(EGMM):
     def _step_alpha(self, step: int, total_steps: int, hp: Any) -> float:
         return float(0.5 * (hp.alpha_0 + hp.alpha_min))  # the mean of the cosine schedule from alpha_0 to alpha_min
+
+
+class OnlineGMMRevival(CappeMoulinesOnlineGMM):
+    """Stepwise online EM ((t + 2)^-rho, tuned rho and batch size) with e-GMM's revival checkpoints enabled."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.revive_dead = True

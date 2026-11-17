@@ -201,6 +201,7 @@ class TorchBatchGMMRevival(TorchBatchGMMFast):
         lbs = torch.zeros(max_iters, dtype=torch.float64, device=dev)
         min_stop = max(self.revive_at) + 2 if self.revive_at else 1
         self.n_revivals_ = 0
+        self.revivals_count_ = 0  # the harness logs this attribute
         vals: list[float] = []
         state = None
         for it in range(max_iters):
@@ -223,6 +224,7 @@ class TorchBatchGMMRevival(TorchBatchGMMFast):
                 M, S, Q, n_rev = revive_dead_components(M, S, Q, covariance_type=self.covariance_type,
                                                         reg_covar=self.reg_covar, dead_ratio=self.dead_ratio)
                 self.n_revivals_ += int(n_rev)
+                self.revivals_count_ = self.n_revivals_
             state = (M, S, Q)
             weights, means, _, prec_factor, log_det_half = self._proj_fast(M, S, Q, dtype)
             vals = [v + log_jac for v in lbs[: it + 1].cpu().tolist()]
@@ -231,3 +233,22 @@ class TorchBatchGMMRevival(TorchBatchGMMFast):
                 return self._finish(X_std, state, it, vals, max_iters, True)
         self.n_iter_executed_ = max_iters
         return self._finish(X_std, state, max_iters - 1, vals, max_iters, False)
+
+
+class TorchBatchGMMSubsample(TorchBatchGMMGraph):
+    """Practitioner baseline at large N: graph-captured batch EM (convergence read every iteration) fitted on a
+    seeded uniform subsample of ``n_sub`` training rows; the subsampling is inside the timed fit."""
+
+    def __init__(self, *args, n_sub: int = 1_000_000, **kwargs) -> None:
+        kwargs.setdefault("check_every", 1)
+        super().__init__(*args, **kwargs)
+        self.n_sub = n_sub
+
+    def fit(self, X, y=None):
+        import numpy as np
+
+        n = X.shape[0]
+        if self.n_sub < n:
+            idx = np.sort(np.random.default_rng(self.random_state).choice(n, self.n_sub, replace=False))
+            X = X[idx]
+        return super().fit(X, y)

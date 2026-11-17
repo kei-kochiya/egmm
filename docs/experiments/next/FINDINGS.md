@@ -94,3 +94,14 @@ check-interval *estimate* used in an earlier draft; the paper's speed numbers co
 * The large synthetic generators contain 0-3 true components below the 0.05/K revival threshold.
 * On the high-dimensional diagonal datasets the deployed alpha_0 is the rule's floor (0.40-0.48), not the
   0.68 cap; the alpha_0 = 0.85 diagnostic also raised alpha_min (0.04 -> 0.085).
+
+## 10. Checks after the third set of reviews (speed2f, speed2g, oracle; 2026-11-17)
+* Batch EM with revival after each of its first 20 iterations (<= 0.3 dead components left): e-GMM still
+  wins 5/0/0 (median -0.55; HIGGS -2.40; 14/15 seeds; 4/4 without HIGGS) at ~11x e-GMM's time.
+* Batch EM on a 250k / 1M-row subsample: e-GMM better 5/0/0 / 4/0/0 (medians -0.51 / -0.39); the 250k fit is
+  a bit faster than e-GMM, the 1M fit 2.4x slower. Stepwise online EM with revival: 5/0/0 (median -0.43), 1.6x.
+* Schedule at 1-10M rows: cosine vs Robbins-Monro 5/2/1 (median -0.28), vs constant step 8/0/0 (median -0.09).
+* HIGGS with the b-tags dequantized: e-GMM -0.16 nats vs batch EM (3/3 seeds), 19x faster.
+* Oracle (true generating mixture): e-GMM 0.57-0.69 nats above it on the full-covariance synthetic sets,
+  batch EM 1.17-1.76; on the diagonal sets both 0.80-1.92.
+

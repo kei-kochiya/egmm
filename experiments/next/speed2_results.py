@@ -108,7 +108,8 @@ def add_speed2_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> 
     groups = [(r"Development, $N_{\mathrm{train}} \le 10^5$", devb[devb["dataset"].isin(n_dev[n_dev <= LARGE_N].index)]),
               (r"Development, $N_{\mathrm{train}} > 10^5$", devb[devb["dataset"].isin(n_dev[n_dev > LARGE_N].index)]),
               (r"Holdout, $N_{\mathrm{train}} \le 10^5$ (post hoc)", hob[hob["dataset"].isin(n_ho[n_ho <= LARGE_N].index)]),
-              (r"Large $N$ ($1$--$10$\,M rows)", lab)]
+              (r"1--10\,M rows, full covariance", lab[lab["cov_type"] == "full"]),
+              (r"1--10\,M rows, diagonal covariance", lab[lab["cov_type"] == "diag"])]
     for name, d in groups:
         cells = []
         for b in ["TorchBatchGMM", "TorchBatchGMM_graph", "TorchBatchGMM_graph1", "BatchBest"]:
@@ -182,6 +183,8 @@ def add_speed2_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> 
         macros["SLgBetterMin"] = f"{-dq[dq < -0.1].max():.2f}"
     wide = (int((dq < -EQ_TOL).sum()), int((dq.abs() <= EQ_TOL).sum()), int((dq > EQ_TOL).sum()))
     macros["SLgWTLwide"] = "/".join(str(x) for x in wide)
+    dqd = dq[[d for d in dq.index if meta.loc[d, "cov_type"] == "diag"]]
+    macros["SLgDiagWTLwide"] = f"{int((dqd < -EQ_TOL).sum())}/{int((dqd.abs() <= EQ_TOL).sum())}/{int((dqd > EQ_TOL).sum())}"
     pss = sl.pivot_table(index=["dataset", "seed"], columns="method", values="test_nll")
     pfs = pss[pss.index.get_level_values(0).isin([d for d in meta.index if meta.loc[d, "cov_type"] == "full"])]
     macros["SLgFiSeedWins"] = f"{int((pfs['EGMM_r0'] < pfs['TorchBatchGMM_fullinit'] - 1e-3).sum())}/{len(pfs)}"
@@ -345,10 +348,17 @@ def add_speed2_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> 
         macros["SLongMinGap"] = f"{-g500.max():.2f}"
         macros["SLongMaxGap"] = f"{-g500.min():.2f}"
         macros["SLongMaxGapNoHiggs"] = f"{-g500.drop('higgs', errors='ignore').min():.2f}"
+        g500n = g500.drop("higgs", errors="ignore")
+        macros["SLongNoHiggs"] = f"{int((g500n < -EQ_TOL).sum())}/{len(g500n)}"
         for ds_, key in (("susy", "Susy"), ("higgs", "Higgs")):
             if (ds_, 100) in long_gap:
                 macros[f"SLong{key}GapHundred"] = f"{long_gap[(ds_, 100)]:+.2f}"
         macros["SLongTime"] = f"{pd.Series(long_rows).median():.0f}"
+        macros["SLongTimeMin"], macros["SLongTimeMax"] = f"{pd.Series(long_rows).min():.0f}", f"{pd.Series(long_rows).max():.0f}"
+        lb = sc.groupby(["dataset", "method"])["lower_bound"].mean().unstack()
+        tr_gap = lb["EGMM_r0"] - lb["TorchBatchGMM_graph1_it500"]  # training log-likelihood per row, positive favors e-GMM
+        macros["SLongTrainMin"], macros["SLongTrainMax"] = f"{tr_gap.min():.2f}", f"{tr_gap.max():.2f}"
+        lines.append(f"long runs: e-GMM minus 500-iteration batch EM training log-likelihood {tr_gap.round(3).to_dict()}")
         if "susy" in g500.index:
             macros["SLongSusyGap"] = f"{g500['susy']:+.2f}"
         if "higgs" in g500.index:
@@ -395,6 +405,8 @@ def add_speed2_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> 
         d_rev = (ne_["EGMM_r0"] - ne_["TorchBatchGMM_revival"])[fds]
         macros["SeRevWTL"] = "/".join(str(x) for x in wtl(d_rev))
         macros["SeRevdNLL"] = f"{d_rev.median():+.2f}"
+        d_rev_n = d_rev.drop("higgs", errors="ignore")
+        macros["SeRevNoHiggs"] = f"{int((d_rev_n < -1e-3).sum())}/{len(d_rev_n)}"
         macros["SeRevHiggs"] = f"{d_rev['higgs']:+.2f}" if "higgs" in d_rev.index else "--"
         macros["SeRevSpd"] = f"{(te_['TorchBatchGMM_revival'] / te_['EGMM_r0'])[fds].median():.0f}"
         rev_gain = (ne_["TorchBatchGMM_revival"] - ne_["TorchBatchGMM_fast1"])[fds]
@@ -415,3 +427,72 @@ def add_speed2_results(exp: Path, gen: Path, macros: dict, lines: list[str]) -> 
                      f"{(te_['OnlineGMM_tuned'] / te_['EGMM_r0'])[fds].round(2).to_dict()})")
         lines.append(f"speed2e diagonal: e-GMM speedup vs fastest batch EM incl. larger chunks {sp_all.round(2).to_dict()} "
                      f"(default chunks {sp_def.round(2).to_dict()}; fastest {best_chunk.to_dict()})")
+
+    # ---------------- speed2f: batch EM with revival after each of its first 20 iterations (one timed fit each)
+    sf = _load(exp, "speed2f_large")
+    if sf is not None and sf["dataset"].nunique() >= 5:
+        gf = sf.groupby(["dataset", "method"])[["test_nll", "fit_time", "dead_components", "revivals"]].mean().unstack()
+        d_every = gf["test_nll"]["EGMM_r0"] - gf["test_nll"]["TorchBatchGMM_revival_every"]
+        macros["SfEveryWTL"] = "/".join(str(x) for x in wtl(d_every))
+        macros["SfEverydNLL"] = f"{d_every.median():+.2f}"
+        d_ev_n = d_every.drop("higgs", errors="ignore")
+        macros["SfEveryNoHiggs"] = f"{int((d_ev_n < -1e-3).sum())}/{len(d_ev_n)}"
+        macros["SfEveryHiggs"] = f"{d_every['higgs']:+.2f}" if "higgs" in d_every.index else "--"
+        macros["SfEveryDeadMax"] = f"{gf['dead_components']['TorchBatchGMM_revival_every'].max():.1f}"
+        macros["SfEveryRevMax"] = f"{gf['revivals']['TorchBatchGMM_revival_every'].max():.0f}"
+        macros["SfEveryTime"] = f"{(gf['fit_time']['TorchBatchGMM_revival_every'] / gf['fit_time']['EGMM_r0']).median():.0f}"
+        ps_ = sf.pivot_table(index=["dataset", "seed"], columns="method", values="test_nll")
+        macros["SfEverySeedWins"] = f"{int((ps_['EGMM_r0'] < ps_['TorchBatchGMM_revival_every'] - 1e-3).sum())}/{len(ps_)}"
+        lines.append(f"speed2f: e-GMM minus batch EM with revival after each of 20 iterations {d_every.round(3).to_dict()}; "
+                     f"dead {gf['dead_components']['TorchBatchGMM_revival_every'].round(2).to_dict()}; revivals "
+                     f"{gf['revivals']['TorchBatchGMM_revival_every'].round(1).to_dict()}; per seed {macros['SfEverySeedWins']}")
+
+    # ---------------- speed2g: schedule at large N, online EM with revival, subsampled batch EM, HIGGS dequantized
+    sg = _load(exp, "speed2g_large")
+    if sg is not None and sg["dataset"].nunique() == len(meta):
+        gg = sg.groupby(["dataset", "method"])[["fit_time", "test_nll"]].mean().unstack()
+        tg, ng = gg["fit_time"], gg["test_nll"]
+        for m_, key in (("EGMM_sched_rm", "Rm"), ("EGMM_sched_const", "Const")):
+            d_ = ng["EGMM_r0"] - ng[m_]
+            macros[f"SgSched{key}WTL"] = "/".join(str(x) for x in wtl(d_))
+            macros[f"SgSched{key}dNLL"] = f"{d_.median():+.2f}"
+        fds_g = [d for d in ng.index if meta.loc[d, "cov_type"] == "full"]
+        d_onr = (ng["EGMM_r0"] - ng["OnlineGMM_tuned_revival"])[fds_g]
+        macros["SgOnRevWTL"], macros["SgOnRevdNLL"] = "/".join(str(x) for x in wtl(d_onr)), f"{d_onr.median():+.2f}"
+        macros["SgOnRevTime"] = f"{(tg['OnlineGMM_tuned_revival'] / tg['EGMM_r0'])[fds_g].median():.1f}"
+        for tag in ("250k", "1m"):
+            col = f"TorchBatchGMM_sub{tag}"
+            if col in ng.columns:
+                sel = ng[col].dropna().index
+                d_s = (ng["EGMM_r0"] - ng[col])[sel]
+                r_s = (tg[col] / tg["EGMM_r0"])[sel]
+                macros[f"SgSub{tag}WTL"] = "/".join(str(x) for x in wtl(d_s))
+                macros[f"SgSub{tag}dNLL"] = f"{d_s.median():+.2f}"
+                macros[f"SgSub{tag}Time"] = f"{r_s.median():.1f}"
+                macros[f"SgSub{tag}n"] = str(len(sel))
+                lines.append(f"speed2g: e-GMM minus batch EM on a {tag} subsample {d_s.round(3).to_dict()} (time ratio {r_s.round(2).to_dict()})")
+        lines.append(f"speed2g: schedule at large N, e-GMM minus RM {(ng['EGMM_r0'] - ng['EGMM_sched_rm']).round(3).to_dict()}; minus constant "
+                     f"{(ng['EGMM_r0'] - ng['EGMM_sched_const']).round(3).to_dict()}; e-GMM minus online EM with revival {d_onr.round(3).to_dict()}")
+    sdq = _load(exp, "speed2g_higgsdq")
+    if sdq is not None and len(sdq):
+        gq = sdq.groupby("method")[["test_nll", "fit_time", "dead_components"]].mean()
+        macros["SDqdNLL"] = f"{gq.loc['EGMM_r0', 'test_nll'] - gq.loc['TorchBatchGMM', 'test_nll']:+.2f}"
+        macros["SDqNoRev"] = f"{gq.loc['EGMM_no_revival', 'test_nll'] - gq.loc['TorchBatchGMM', 'test_nll']:+.2f}"
+        macros["SDqDeadTB"] = f"{gq.loc['TorchBatchGMM', 'dead_components']:.1f}"
+        macros["SDqSpd"] = f"{gq.loc['TorchBatchGMM_fast1', 'fit_time'] / gq.loc['EGMM_r0', 'fit_time']:.0f}"
+        hq = sdq.pivot_table(index="seed", columns="method", values="test_nll")
+        macros["SDqSeedWins"] = f"{int((hq['EGMM_r0'] < hq['TorchBatchGMM'] - 1e-3).sum())}/{len(hq)}"
+        lines.append(f"HIGGS dequantized: {gq.round(3).to_dict()}")
+
+    # ---------------- oracle test NLL of the synthetic large mixtures (experiments/next/oracle_nll.py)
+    of = exp / "next" / "oracle_large.csv"
+    if of.exists():
+        orc = pd.read_csv(of).set_index("dataset")["oracle_test_nll"]
+        syn_o = [d for d in orc.index if d in nll.index]
+        gap_e = (nll.loc[syn_o, "EGMM_r0"] - orc[syn_o])
+        gap_b = (nll.loc[syn_o, "TorchBatchGMM"] - orc[syn_o])
+        for cov in ("full", "diag"):
+            sel = [d for d in syn_o if meta.loc[d, "cov_type"] == cov]
+            macros[f"SOrc{cov.capitalize()}EMin"], macros[f"SOrc{cov.capitalize()}EMax"] = f"{gap_e[sel].min():.2f}", f"{gap_e[sel].max():.2f}"
+            macros[f"SOrc{cov.capitalize()}BMin"], macros[f"SOrc{cov.capitalize()}BMax"] = f"{gap_b[sel].min():.2f}", f"{gap_b[sel].max():.2f}"
+        lines.append(f"oracle gaps (test NLL minus true mixture): e-GMM {gap_e.round(3).to_dict()}; batch EM {gap_b.round(3).to_dict()}")

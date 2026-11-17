@@ -65,6 +65,9 @@ come from a re-timing that adds variants checking every iteration:
     python experiments/next/run_next.py --stages speed2c     # speed2c_large.csv: 100/500-iteration batch EM, seed 0 (~27 min)
     python experiments/next/run_next.py --stages speed2d     # e-GMM without revival; HIGGS without b-tags (~12 min)
     python experiments/next/run_next.py --stages speed2e     # batch EM + revival, online EM, larger chunks (~45 min)
+    python experiments/next/run_next.py --stages speed2f     # batch EM with revival after each of 20 iterations (~10 min)
+    python experiments/next/run_next.py --stages speed2g     # schedule at large N, online EM + revival, subsampled batch EM, dequantized HIGGS (~16 min)
+    python experiments/next/oracle_nll.py                    # oracle test NLL of the synthetic large mixtures (CPU, ~10 min)
 
 `speed2` adds `_fast1`/`_graph1`, logs executed iterations and GPU clock/temperature/power per (dataset, seed),
 an `EGMM_f64` run on full-covariance development datasets, and at large N full-data-seeded batch EM
